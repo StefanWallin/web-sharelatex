@@ -3,13 +3,16 @@ Settings = require 'settings-sharelatex'
 _ = require('underscore')
 FolderSchema = require('./Folder.js').FolderSchema
 logger = require('logger-sharelatex')
-sanitize = require('validator').sanitize
+sanitize = require('sanitizer')
 concreteObjectId = require('mongoose').Types.ObjectId
 Errors  = require "../errors"
 
 
 Schema = mongoose.Schema
 ObjectId = Schema.ObjectId
+
+DeletedDocSchema = new Schema
+	name: String
 
 ProjectSchema = new Schema
 	name              :   {type:String, default:'new project'}
@@ -22,10 +25,11 @@ ProjectSchema = new Schema
 	publicAccesLevel  :   {type: String, default: 'private'}
 	compiler		  :   {type:String, default:'pdflatex'}
 	spellCheckLanguage :   {type:String, default:'en'}
-	existsInVersioningApi :   {type: Boolean, default: false}
 	deletedByExternalDataSource : {type: Boolean, default: false}
 	useClsi2          :   {type:Boolean, default: true}
 	description : {type:String, default:''}
+	archived          : { type: Boolean }
+	deletedDocs       : [DeletedDocSchema]
 
 ProjectSchema.statics.getProject = (project_or_id, fields, callback)->
 	if project_or_id._id?
@@ -53,10 +57,10 @@ ProjectSchema.statics.findPopulatedById = (project_id, callback)->
 					callback(null, projects[0])
 
 ProjectSchema.statics.findAllUsersProjects = (user_id, requiredFields, callback)->
-	this.find {owner_ref:user_id}, requiredFields, (err, projects)=>
-		this.find {collaberator_refs:user_id}, requiredFields, (err, collabertions)=>
-			this.find {readOnly_refs:user_id}, requiredFields, (err, readOnlyProjects)=>
-				callback(projects, collabertions, readOnlyProjects)
+	this.find {owner_ref:user_id, archived: { $exists: false }}, requiredFields, (err, projects)=>
+		this.find {collaberator_refs:user_id, archived: { $exists: false }}, requiredFields, (err, collabertions)=>
+			this.find {readOnly_refs:user_id, archived: { $exists: false }}, requiredFields, (err, readOnlyProjects)=>
+				callback(err, projects, collabertions, readOnlyProjects)
 
 sanitizeTypeOfElement = (elementType)->
 	lastChar = elementType.slice -1
@@ -112,7 +116,7 @@ applyToAllFilesRecursivly = ProjectSchema.statics.applyToAllFilesRecursivly = (f
 
 ProjectSchema.methods.getSafeProjectName = ->
 	safeProjectName = this.name.replace(new RegExp("\\W", "g"), '_')
-	return sanitize(safeProjectName).xss()
+	return sanitize.escape(safeProjectName)
 
 conn = mongoose.createConnection(Settings.mongo.url, server: poolSize: Settings.mongo.poolSize || 10)
 

@@ -20,16 +20,19 @@ block content
 								a(href='#passwordReset', data-toggle="tab") Password
 							li
 								a(href='#newsletter', data-toggle="tab") Newsletter
-							- if(userCanSeeDropbox)
-								li
-									a(href='#dropboxSettings', data-toggle="tab") Dropbox 
-										span.label.label-warning beta
+							li
+								a(href='#dropboxSettings', data-toggle="tab") Dropbox 
+									span.label.label-warning beta
 							li
 								a(href='#deleteAccount', data-toggle="tab") Delete Account
 								
 						form#userSettings.tab-content.form-horizontal
 							input(type="hidden", name="_csrf", value=csrfToken)
 							.tab-pane#personalSettings.active
+								.control-group
+									label(for='firstName').control-label Email
+									.controls
+										input#emailAddress(type='email', name='email', value=user.email)
 								.control-group
 									label(for='firstName').control-label First Name
 									.controls
@@ -151,6 +154,8 @@ block content
 							.tab-pane#newsletter
 								p Every few months we send a news letter out summarizing the new features available, if you would prefer to not receive this email then you are free to unsubscribe below at any time							
 								a#unsubscribeFromNewsletter.btn.btn-danger(data-csrf=csrfToken) Unsubscribe
+
+		include ../general/small-footer
 
 	#changePasswordModal(style='display: none')
 		.modal

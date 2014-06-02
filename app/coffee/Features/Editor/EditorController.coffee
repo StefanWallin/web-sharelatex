@@ -1,19 +1,18 @@
 logger = require('logger-sharelatex')
 Metrics = require('../../infrastructure/Metrics')
-sanitize = require('validator').sanitize
+sanitize = require('sanitizer')
 ProjectEditorHandler = require('../Project/ProjectEditorHandler')
 ProjectEntityHandler = require('../Project/ProjectEntityHandler')
 ProjectOptionsHandler = require('../Project/ProjectOptionsHandler')
 ProjectDetailsHandler = require('../Project/ProjectDetailsHandler')
+ProjectDeleter = require("../Project/ProjectDeleter")
 ProjectGetter = require('../Project/ProjectGetter')
-ProjectHandler = new (require('../../handlers/ProjectHandler'))()
+CollaboratorsHandler = require("../Collaborators/CollaboratorsHandler")
 DocumentUpdaterHandler = require('../DocumentUpdater/DocumentUpdaterHandler')
 LimitationsManager = require("../Subscription/LimitationsManager")
 AuthorizationManager = require("../Security/AuthorizationManager")
-AutomaticSnapshotManager = require("../Versioning/AutomaticSnapshotManager")
-VersioningApiHandler = require("../Versioning/VersioningApiHandler")
-AnalyticsManager = require("../Analytics/AnalyticsManager")
 EditorRealTimeController = require("./EditorRealTimeController")
+TrackChangesManager = require("../TrackChanges/TrackChangesManager")
 settings = require('settings-sharelatex')
 slReqIdHelper = require('soa-req-id')
 tpdsPollingBackgroundTasks = require('../ThirdPartyDataStore/TpdsPollingBackgroundTasks')
@@ -40,27 +39,23 @@ module.exports = EditorController =
 			return callback(error) if error?
 			ProjectGetter.populateProjectWithUsers project, (error, project) ->
 				return callback(error) if error?
-				VersioningApiHandler.enableVersioning project, (error) ->
-					return callback(error) if error?
-					AuthorizationManager.getPrivilegeLevelForProject project, user,
-						(error, canAccess, privilegeLevel) ->
-							if error? or !canAccess
-								callback new Error("Not authorized")
-							else
-								AnalyticsManager.trackOpenEditor user, project
-								client.join(project_id)
-								client.set("project_id", project_id)
-								client.set("owner_id", project.owner_ref._id)
-								client.set("user_id", user._id)
-								client.set("first_name", user.first_name)
-								client.set("last_name", user.last_name)
-								client.set("email", user.email)
-								client.set("connected_time", new Date())
-								client.set("signup_date", user.signUpDate)
-								client.set("login_count", user.loginCount)
-								client.set("take_snapshots", project.existsInVersioningApi)
-								AuthorizationManager.setPrivilegeLevelOnClient client, privilegeLevel
-								callback null, ProjectEditorHandler.buildProjectModelView(project), privilegeLevel, EditorController.protocolVersion
+				AuthorizationManager.getPrivilegeLevelForProject project, user,
+					(error, canAccess, privilegeLevel) ->
+						if error? or !canAccess
+							callback new Error("Not authorized")
+						else
+							client.join(project_id)
+							client.set("project_id", project_id)
+							client.set("owner_id", project.owner_ref._id)
+							client.set("user_id", user._id)
+							client.set("first_name", user.first_name)
+							client.set("last_name", user.last_name)
+							client.set("email", user.email)
+							client.set("connected_time", new Date())
+							client.set("signup_date", user.signUpDate)
+							client.set("login_count", user.loginCount)
+							AuthorizationManager.setPrivilegeLevelOnClient client, privilegeLevel
+							callback null, ProjectEditorHandler.buildProjectModelView(project), privilegeLevel, EditorController.protocolVersion
 
 	leaveProject: (client, user) ->
 		self = @
@@ -106,6 +101,7 @@ module.exports = EditorController =
 			logger.log project_id: project_id, connectedCount: peopleStillInProject, "flushing if empty"
 			if peopleStillInProject == 0
 				DocumentUpdaterHandler.flushProjectToMongoAndDelete(project_id)
+				TrackChangesManager.flushProject(project_id)
 			callback()
 			), 500
 		
@@ -123,7 +119,7 @@ module.exports = EditorController =
 						cursorData.name = "Anonymous"
 					EditorRealTimeController.emitToRoom(project_id, "clientTracking.clientUpdated", cursorData)
 
-	addUserToProject: (project_id, email, privlages, callback = (error, collaborator_added)->)->
+	addUserToProject: (project_id, email, privileges, callback = (error, collaborator_added)->)->
 		email = email.toLowerCase()
 		LimitationsManager.isCollaboratorLimitReached project_id, (error, limit_reached) =>
 			if error?
@@ -133,12 +129,13 @@ module.exports = EditorController =
 			if limit_reached
 				callback null, false
 			else
-				ProjectHandler.addUserToProject project_id, email, privlages, (user)=>
-					EditorRealTimeController.emitToRoom(project_id, 'userAddedToProject', user, privlages)
+				CollaboratorsHandler.addUserToProject project_id, email, privileges, (err, user)=>
+					ProjectEntityHandler.flushProjectToThirdPartyDataStore project_id, "", ->
+					EditorRealTimeController.emitToRoom(project_id, 'userAddedToProject', user, privileges)
 					callback null, true
 
 	removeUserFromProject: (project_id, user_id, callback)->
-		ProjectHandler.removeUserFromProject project_id, user_id, =>
+		CollaboratorsHandler.removeUserFromProject project_id, user_id, =>
 			EditorRealTimeController.emitToRoom(project_id, 'userRemovedFromProject', user_id)
 			if callback?
 				callback()
@@ -158,12 +155,11 @@ module.exports = EditorController =
 		DocumentUpdaterHandler.setDocument project_id, doc_id, docLines, (err)=>
 			logger.log project_id:project_id, doc_id:doc_id, "notifying users that the document has been updated"
 			EditorRealTimeController.emitToRoom(project_id, "entireDocUpdate", doc_id)
-			ProjectEntityHandler.updateDocLines project_id, doc_id, docLines, sl_req_id, (err)->
-				callback(err)
+			DocumentUpdaterHandler.flushDocToMongo project_id, doc_id, callback
 
 	addDoc: (project_id, folder_id, docName, docLines, sl_req_id, callback = (error, doc)->)->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
-		docName = sanitize(docName).xss()
+		docName = sanitize.escape(docName)
 		logger.log sl_req_id:sl_req_id, "sending new doc to project #{project_id}"
 		Metrics.inc "editor.add-doc"
 		ProjectEntityHandler.addDoc project_id, folder_id, docName, docLines, sl_req_id, (err, doc, folder_id)=>
@@ -172,7 +168,7 @@ module.exports = EditorController =
 
 	addFile: (project_id, folder_id, fileName, path, sl_req_id, callback = (error, file)->)->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
-		fileName = sanitize(fileName).xss()
+		fileName = sanitize.escape(fileName)
 		logger.log  sl_req_id:sl_req_id, "sending new file to project #{project_id} with folderid: #{folder_id}"
 		Metrics.inc "editor.add-file"
 		ProjectEntityHandler.addFile project_id, folder_id, fileName, path, (err, fileRef, folder_id)=>
@@ -185,7 +181,7 @@ module.exports = EditorController =
 
 	addFolder: (project_id, folder_id, folderName, sl_req_id, callback = (error, folder)->)->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
-		folderName = sanitize(folderName).xss()
+		folderName = sanitize.escape(folderName)
 		logger.log "sending new folder to project #{project_id}"
 		Metrics.inc "editor.add-folder"
 		ProjectEntityHandler.addFolder project_id, folder_id, folderName, (err, folder, folder_id)=>
@@ -237,6 +233,44 @@ module.exports = EditorController =
 			EditorRealTimeController.emitToRoom(project_id, 'projectDescriptionUpdated', description)
 			callback()
 
+	deleteProject: (project_id, callback)->
+		Metrics.inc "editor.delete-project"
+		logger.log project_id:project_id, "recived message to delete project"
+		ProjectDeleter.deleteProject project_id, callback
+
+	renameEntity: (project_id, entity_id, entityType, newName, callback)->
+		newName = sanitize.escape(newName)
+		Metrics.inc "editor.rename-entity"
+		logger.log entity_id:entity_id, entity_id:entity_id, entity_id:entity_id, "reciving new name for entity for project"
+		ProjectEntityHandler.renameEntity project_id, entity_id, entityType, newName, =>
+			if newName.length > 0
+				EditorRealTimeController.emitToRoom project_id, 'reciveEntityRename', entity_id, newName
+				callback?()
+
+	moveEntity: (project_id, entity_id, folder_id, entityType, callback)->
+		Metrics.inc "editor.move-entity"
+		ProjectEntityHandler.moveEntity project_id, entity_id, folder_id, entityType, =>
+			EditorRealTimeController.emitToRoom project_id, 'reciveEntityMove', entity_id, folder_id
+			callback?()
+
+	renameProject: (project_id, newName, callback)->
+		newName = sanitize.escape(newName)
+		ProjectDetailsHandler.renameProject project_id, newName, =>
+			newName = sanitize.escape(newName)
+			EditorRealTimeController.emitToRoom project_id, 'projectNameUpdated', newName
+			callback?()
+
+	setPublicAccessLevel : (project_id, newAccessLevel, callback)->
+		ProjectDetailsHandler.setPublicAccessLevel project_id, newAccessLevel, =>
+			EditorRealTimeController.emitToRoom project_id, 'publicAccessLevelUpdated', newAccessLevel
+			callback?()
+
+	setRootDoc: (project_id, newRootDocID, callback)->
+		ProjectEntityHandler.setRootDoc project_id, newRootDocID, () =>
+			EditorRealTimeController.emitToRoom project_id, 'rootDocUpdated', newRootDocID
+			callback?()
+
+			
 	p:
 		notifyProjectUsersOfNewFolder: (project_id, folder_id, folder, callback = (error)->)->
 			logger.log project_id:project_id, folder:folder, parentFolder_id:folder_id, "sending newly created folder out to users"

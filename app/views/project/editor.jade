@@ -38,7 +38,8 @@ block content
 		window.requirejs = {
 			"paths" : {
 				"underscore": "libs/underscore",
-				"mathjax": "https://c328740.ssl.cf1.rackcdn.com/mathjax/latest/MathJax.js?config=TeX-AMS_HTML"
+				"mathjax": "https://c328740.ssl.cf1.rackcdn.com/mathjax/latest/MathJax.js?config=TeX-AMS_HTML",
+				"moment": "libs/moment"
 			},
 			"urlArgs" : "fingerprint=#{fingerprint(jsPath + 'ide.js')}",
 			"waitSeconds": 0,
@@ -56,9 +57,7 @@ block content
 		};
 
 	script(type='text/javascript')
-		if (typeof(mixpanel) != "undefined") {
-			mixpanel.track('Opened Editor', { project_id: window.userSettings.project_id });
-		}
+		ga('send', 'event', 'editor-interaction', 'editor-opened')
 
 	- locals.supressDefaultJs = true
 	- var fingerprintedPath = fingerprint(jsPath+'libs/pdf.worker.js')

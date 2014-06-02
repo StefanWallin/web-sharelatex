@@ -89,27 +89,38 @@ define [
 		hasBufferedOps: () ->
 			@_doc.inflightOp? or @_doc.pendingOp?
 
+		getInflightOp: () -> @_doc.inflightOp
+		getPendingOp: () -> @_doc.pendingOp
+
 		attachToAce: (ace) -> @_doc.attach_ace(ace)
 		detachFromAce: () -> @_doc.detach_ace?()
 	
 		INFLIGHT_OP_TIMEOUT: 10000
 		_startInflightOpTimeout: (update) ->
+			meta =
+				v: update.v
+				op_sent_at: new Date()
 			timer = setTimeout () =>
-				@_handleError "Doc op was not acknowledged in time"
+				@trigger "op:timeout", update
 			, @INFLIGHT_OP_TIMEOUT
 			@_doc.inflightCallbacks.push () =>
 				clearTimeout timer
 
-		_handleError: (error) ->
-			@trigger "error", error
+		_handleError: (error, meta = {}) ->
+			@trigger "error", error, meta
 
 		_bindToDocChanges: (doc) ->
 			submitOp = doc.submitOp
 			doc.submitOp = (args...) =>
-				@trigger "op:sent"
+				@trigger "op:sent", args...
 				doc.pendingCallbacks.push () =>
-					@trigger "op:acknowledged"
+					@trigger "op:acknowledged", args...
 				submitOp.apply(doc, args)
+
+			flush = doc.flush
+			doc.flush = (args...) =>
+				@trigger "flush", doc.inflightOp, doc.pendingOp, doc.version
+				flush.apply(doc, args)
 
 	_.extend(ShareJsDoc::, Backbone.Events)
 

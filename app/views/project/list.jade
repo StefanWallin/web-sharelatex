@@ -26,21 +26,23 @@ block content
 						span.caret
 					ul.dropdown-menu.pull-right(role="menu")
 						li
-							a(href='/project/'+project_id+'/clone', data-csrf=csrfToken).cloneProject Clone Project
-						-if (project.accessLevel == "owner")
-							li
-								a(href='/project/'+project_id, data-name=project.name, data-id=project_id, data-csrf=csrfToken).deleteProject Delete Project
-						-else
-							li
-								a(href='/project/'+project_id+'/leave', data-name=project.name, data-id=project._id, data-csrf=csrfToken).leaveProject Leave Project
+							a(href='/project/'+project_id+'/clone', data-csrf=csrfToken).cloneProject Clone
 						li
 							a(href='/project/'+project._id+'/download/zip').downloadZip Download Zip
+						-if (project.accessLevel == "owner")
+							li
+								a(href='/project/'+project_id+'/rename', data-name=project.name, data-id=project_id, data-csrf=csrfToken).renameProject Rename
+							li
+								a(href='/project/'+project_id, 			data-name=project.name, data-id=project_id, data-csrf=csrfToken).deleteProject Delete
+						-else
+							li
+								a(href='/project/'+project_id+'/leave', data-name=project.name, data-id=project_id, data-csrf=csrfToken).leaveProject Leave
 				a.projectName(href="/project/#{project._id}") #{project.name}
 				.projectDetails
 					span Last modified on 
 					span.isoDate #{project.lastUpdated.toISOString()} 
 					span &nbsp; - &nbsp;
-					span #{formatPrivlageLevel(project.publicAccesLevel)}
+					span #{formatProjectPublicAccessLevel(project.publicAccesLevel)}
 					span &nbsp; - &nbsp;
 					mixin formatAccessLevel(project.accessLevel)
 				.project-tags(data-project-id=project_id)
@@ -56,9 +58,9 @@ block content
 
 	include ../general/sidebar
 
+
 	.content-with-navigation-sidebar
 		.box#projectListArea
-						
 			.row-fluid
 				.span12
 					.page-header
@@ -144,6 +146,12 @@ block content
 		mixin tag('{{ project_id }}', '{{ tagName }}', true)
 
 	- locals.supressDefaultJs = true
+	script
+		window.requirejs = {
+			"paths" : {
+				"moment": "libs/moment"
+			}
+		};
 	script(
 		data-main=jsPath+'list.js?fingerprint='+fingerprint(jsPath + 'list.js'), 
 		baseurl=jsPath,

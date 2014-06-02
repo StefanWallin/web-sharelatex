@@ -35,6 +35,8 @@ define [
 				identifier: "editor"
 				element: @editorPanel
 			@initializeEditor()
+			@bindToFileTreeEvents()
+			@enable()
 			@loadingIndicator = $(@templates.loadingIndicator)
 			@editorPanel.find("#editor").append(@loadingIndicator)
 			@leftPanel = @editorPanel.find("#leftEditorPanel")
@@ -42,8 +44,13 @@ define [
 			@initSplitView()
 			@switchToFlatView()
 
+		bindToFileTreeEvents: () ->
+			@ide.fileTreeManager.on "open:doc", (doc_id, options = {}) =>
+				if @enabled
+					@openDoc doc_id, options
+
 		initSplitView: () ->
-			splitter = @editorPanel.find("#editorSplitter")
+			@$splitter = splitter = @editorPanel.find("#editorSplitter")
 			options =
 				spacing_open: 8
 				spacing_closed: 16
@@ -64,7 +71,7 @@ define [
 		_saveSplitterState: () ->
 			if $("#editorSplitter").is(":visible")
 				state = $("#editorSplitter").layout().readState()
-				eastWidth = state.east.size
+				eastWidth = state.east.size + $("#editorSplitter .ui-layout-resizer-east").width()
 				percentWidth = eastWidth / $("#editorSplitter").width() * 100 + "%"
 				state.east.size = percentWidth
 				$.localStorage("layout.editor", state)
@@ -73,7 +80,7 @@ define [
 			if @currentViewState != @viewOptions.splitView
 				@currentViewState = @viewOptions.splitView
 				@leftPanel.prepend(
-					@editorPanel.find("#editor")
+					@editorPanel.find("#editorWrapper")
 				)
 				splitter = @editorPanel.find("#editorSplitter")
 				splitter.show()
@@ -84,7 +91,7 @@ define [
 				@_saveSplitterState()
 				@currentViewState = @viewOptions.flatView
 				@editorPanel.prepend(
-					@editorPanel.find("#editor")
+					@editorPanel.find("#editorWrapper")
 				)
 				@editorPanel.find("#editorSplitter").hide()
 				@aceEditor.resize(true)
@@ -121,16 +128,14 @@ define [
 			@aceEditor = aceEditor = AceEditor.edit("editor")
 
 			@on "resize", => @aceEditor.resize()
-			@ide.layoutManager.on "resize", => @aceEditor.resize()
+			@ide.layoutManager.on "resize", => @trigger "resize"
 
 			mode = window.userSettings.mode
 			theme = window.userSettings.theme
-			fontSize = window.userSettings.fontSize
 
 			chosenKeyBindings = keybindings[mode]
 			aceEditor.setKeyboardHandler(chosenKeyBindings)
 			aceEditor.setTheme("ace/theme/#{window.userSettings.theme}")
-			document.getElementById('editor').style.fontSize = fontSize+'px'
 			aceEditor.setShowPrintMargin(false)
 
 			# Prevert Ctrl|Cmd-S from triggering save dialog
@@ -141,6 +146,7 @@ define [
 				readOnly: true
 			aceEditor.commands.removeCommand "transposeletters"
 			aceEditor.commands.removeCommand "showSettingsMenu"
+			aceEditor.commands.removeCommand "foldall"
 
 			aceEditor.showCommandLine = (args...) =>
 				@trigger "showCommandLine", aceEditor, args...
@@ -204,11 +210,6 @@ define [
 				callback null, @document
 
 		_bindToDocumentEvents: (document) ->
-			document.on "op:sent", () =>
-				@ide.savingAreaManager.saving()
-			document.on "op:acknowledged", () =>
-				@ide.savingAreaManager.saved()
-
 			document.on "remoteop", () =>
 				@undoManager.nextUpdateIsRemote = true
 
@@ -225,7 +226,7 @@ define [
 			document.on "externalUpdate", () =>
 				Modal.createModal
 					title: "Document Updated Externally"
-					message: "This document was just updated externally (probably via Dropbox). Any recent changes you have made may have been overwritten. To see previous versions please look in the history."
+					message: "This document was just updated externally. Any recent changes you have made may have been overwritten. To see previous versions please look in the history."
 					buttons:[
 						text: "Ok"
 					]
@@ -285,6 +286,7 @@ define [
 				$.localStorage("doc.position.#{@current_doc_id}", docPosition)
 			
 		onCursorChange: (event) ->
+			@trigger "cursor:change", event
 			if !@ignoreCursorPositionChanges
 				docPosition = $.localStorage("doc.position.#{@current_doc_id}") || {}
 				docPosition.cursorPosition = @getCursorPosition()
@@ -302,6 +304,12 @@ define [
 
 		gotoLine: (line) ->
 			@aceEditor.gotoLine(line)
+
+		getCurrentLine: () ->
+			@aceEditor.selection?.getCursor()?.row
+
+		getCurrentColumn: () ->
+			@aceEditor.selection?.getCursor()?.column
 
 		getLines: (from, to) ->
 			if from? and to?
@@ -334,6 +342,9 @@ define [
 		getContainerElement: () ->
 			$(@aceEditor.renderer.getContainerElement())
 
+		getCursorElement: () ->
+			@getContainerElement().find(".ace_cursor")
+
 		textToEditorCoordinates: (x, y) ->
 			editorAreaOffset = @getContainerElement().offset()
 			{pageX, pageY} = @aceEditor.renderer.textToScreenCoordinates(x, y)
@@ -353,3 +364,11 @@ define [
 		getCurrentDocId: () ->
 			@current_doc_id
 
+		enable: () ->
+			@enabled = true
+
+		disable: () ->
+			@enabled = false
+
+		hasUnsavedChanges: () ->
+			Document.hasUnsavedChanges()

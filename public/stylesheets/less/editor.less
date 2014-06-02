@@ -177,25 +177,13 @@ body.editor {
 			width: 100%;
 			height: 100%;
 		}
-		#editor, #orchard {
+		#editor {
 			width: 100%;
 			height: 100%;
 		}
-		#orchard-toolbar {
-			height: 28px;
-			padding: 5px;
-			background-color: white;
-			border-bottom: 1px solid #aaa;
-			select {
-				margin-bottom: 0;
-			}
-		}
-		#orchard-editor {
-			position: absolute;
-			top: 39px;
-			bottom: 0;
-			left: 0;
-			right: 0;
+		#editorWrapper {
+			height: 100%;
+			width: 100%;
 		}
 		#rightEditorPanel {
 			border-left: 1px solid #aaa;
@@ -211,6 +199,29 @@ body.editor {
 			right: 0;
 			bottom: 0;
 			z-index: 100;
+		}
+		#trackChangesPanel {
+			width: 100%;
+			height: 100%;
+		}
+		.sync-buttons {
+			z-index: 3;
+			position: absolute;
+			top: 45px;
+			right: 0;
+			padding: 2px;
+			background-color: #eee;
+			.border-radius(3px);
+			border: 1px solid #aaa;
+			button {
+				display: block;
+				padding: 3px;
+				font-size: 12px;
+				line-height: 12px;
+			}
+			button:first-child {
+				margin-bottom: 3px;
+			}
 		}
 	}
 
@@ -299,7 +310,7 @@ body.editor {
 			.small {
 				color: #666;
 				margin-top: 6px;
-				white-space: pre;
+				white-space: pre-wrap;
 			}
 		}
 		#rawLogArea {
@@ -451,7 +462,7 @@ body.editor {
 	overflow: hidden;
 	cursor: default;
 	border-right: 1px solid #aaa;
-	background: url('/img/noise.png') #eee;
+	background-color: rgb(238,238,238);
 	padding: 6px 0 0 6px;
 
 	ul {
@@ -467,9 +478,16 @@ body.editor {
 		list-style: none;
 		white-space: nowrap;
 		cursor: pointer;
+		position: relative;
 		.clickable {
 			height: 24px;
 			margin-left: 20px;
+		}
+		.dropdown-caret {
+			display: none;
+		}
+		.entity-label {
+			display: none;
 		}
 	}
 
@@ -503,9 +521,60 @@ body.editor {
 	}
 
 	li.selected, .entity-list-item.selected {
-		background-color: rgba(55,120,194,0.3);
+		background-color: rgb(185,201,227);
 		.border-radius(5px 0 0 5px);
-		color: #3d5979
+		color: #3d5979;
+		.dropdown-caret {
+			display: block;
+			padding: 4px 6px 4px 4px;
+			position: absolute;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			background-color: rgb(185,201,227);
+			&:before {
+				content: " ";
+				#gradient > .horizontal(rgba(185,201,227,0), rgb(185,201,227));
+				background-color: transparent;
+				width: 12px;
+				height: 100%;
+				position: absolute;
+				top: 0;
+				bottom: 0;
+				right: 20px
+			}
+			i {
+				vertical-align: top;
+				margin: 0;
+			}
+		}
+	}
+
+	.entity-list-item.show-label {
+		.dropdown-caret {
+			display: none;
+		}
+		.entity-label {
+			display: block;
+			position: absolute;
+			top: 3px;
+			right: 3px;
+			font-size: 13px;
+			line-height: 13px;
+			padding: 2px 6px 3px;
+			background-color: hsl(100, 80%, 42%);
+			font-weight: normal;
+			text-shadow: none;
+			&:hover {
+				background-color: hsl(100, 80%, 35%)
+			}
+		}
+	}
+
+	.entity-list-item.folder-open.show-label {
+		.entity-label {
+			display: none;
+		}
 	}
 	
 	li img, .entity-list-item i {
@@ -606,6 +675,12 @@ table {
 		font-weight: normal;
 		color: black;
 	}
+}
+
+.context-menu {
+	display: block;
+	left: auto;
+	.border-radius(0);
 }
 
 .clear-modal-backdrop {
@@ -865,6 +940,18 @@ i[class*="sprite-"] {
 	}
 }
 
+.project-description {
+	textarea {
+		min-height: 120px;
+	}
+	label {
+		border-bottom: 1px solid #eeeeee;
+		font-size: 1.2em;
+		line-height: 1.8em;
+		margin-bottom: 6px;
+	}
+}
+
 .btn-facebook {
   color: #ffffff;
   text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);
@@ -964,18 +1051,6 @@ i[class*="sprite-"] {
   background-color: #9a2b1f \9;
 }
 
-#orchard-editor {
-	background: white;
-	> .CodeMirror > .CodeMirror-scroll > .CodeMirror-sizer > div > .CodeMirror-lines {
-		background-color: white;
-		margin: auto;
-		max-width: 390pt;
-		min-height: 592pt;
-		margin-top: 20px;
-		margin-bottom: 20px;
-	}
-}
-
 #errorMessages {
 	z-index: 10000;
 	top: 4px;
@@ -998,5 +1073,3 @@ i[class*="sprite-"] {
 		margin-bottom: 6px;
 	}
 }
-
-@import "./orchard";

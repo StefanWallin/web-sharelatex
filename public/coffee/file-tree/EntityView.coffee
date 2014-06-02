@@ -1,7 +1,8 @@
 define [
+	"utils/ContextMenu"
 	"libs/backbone"
 	"libs/mustache"
-], () ->
+], (ContextMenu) ->
 	EntityView = Backbone.View.extend
 		entityTemplate: $("#entityTemplate").html()
 
@@ -14,6 +15,9 @@ define [
 		events: () ->
 			events = {}
 			events["click ##{@model.id} > .js-clickable"] = "parentOnClick"
+			events["click ##{@model.id} > .entity-label"] = "parentOnClick"
+			events["click .dropdown-caret"] = "showContextMenuFromCaret"
+			events["contextmenu"] = "showContextMenuFromRightClick"
 			return events
 
 		render: () ->
@@ -26,6 +30,7 @@ define [
 			@$nameEl = @$(".name")
 			@$inputEl = @$("input.js-rename")
 			@$entityListItemEl = @$el.children(".entity-list-item")
+			@$labelEl = @$entityListItemEl.children(".entity-label")
 
 		_makeEditable: () ->
 			if @ide.isAllowedToDoIt "readAndWrite"
@@ -44,6 +49,17 @@ define [
 		showRenameBox: () ->
 			@$nameEl.hide()
 			@$inputEl.show()
+
+		setLabels: (labels) ->
+			label = labels[@model.get("id")]
+			if label?
+				@$entityListItemEl.addClass("show-label")
+				@$labelEl.text("±")
+				return true
+			else
+				@$entityListItemEl.removeClass("show-label")
+				@$labelEl.text("")
+				return false
 
 		select: () ->
 			@selected = true
@@ -71,6 +87,51 @@ define [
 			if @ide.isAllowedToDoIt "readAndWrite"
 				@startRename()
 
+		showContextMenuFromCaret: (e) ->
+			e.stopPropagation()
+			caret = @$(".dropdown-caret")
+			offset = caret.offset()
+			position =
+				top: offset.top + caret.outerHeight()
+				right: $(document.body).width() - (offset.left + caret.outerWidth())
+			@toggleContextMenu(position)
+
+		showContextMenuFromRightClick: (e) ->
+			e.preventDefault()
+			e.stopPropagation()
+			position =
+				left: e.pageX
+				top: e.pageY
+			@showContextMenu(position)
+
+		toggleContextMenu: (position) ->
+			if @contextMenu?
+				@contextMenu.destroy()
+			else
+				@showContextMenu(position)
+
+		showContextMenu: (position) ->
+			entries = @getContextMenuEntries()
+
+			@manager.trigger "contextmenu:beforeshow", @model, entries
+
+			@contextMenu = new ContextMenu(position, entries)
+			@contextMenu.on "destroy", () =>
+				delete @contextMenu
+
+		getContextMenuEntries: () ->
+			return [{
+				text: "Rename"
+				onClick: () =>
+					@startRename()
+					ga('send', 'event', 'editor-interaction', 'renameEntity', "entityView")
+			}, {
+				text: "Delete"
+				onClick: () =>
+					@manager.confirmDelete(@model)
+					ga('send', 'event', 'editor-interaction', 'deleteEntity', "entityView")
+			}]
+
 		_initializeDrag: () ->
 			@$entityListItemEl.draggable
 				delay: 250
@@ -93,7 +154,7 @@ define [
 				name = @model.get("name")
 				@$inputEl.val(name).focus()
 				if @$inputEl[0].setSelectionRange?
-					selectionEnd = name.indexOf(".")
+					selectionEnd = name.lastIndexOf(".")
 					if selectionEnd == -1
 						selectionEnd = name.length
 					@$inputEl[0].setSelectionRange(0, selectionEnd)

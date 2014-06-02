@@ -11,6 +11,7 @@ define [
 	"ide/TabManager"
 	"ide/LayoutManager"
 	"ide/FileUploadManager"
+	"ide/SavingAreaManager"
 	"spelling/SpellingManager"
 	"search/SearchManager"
 	"models/Project"
@@ -25,6 +26,8 @@ define [
 	"file-view/FileViewManager"
 	"tour/IdeTour"
 	"analytics/AnalyticsManager"
+	"track-changes/TrackChangesManager"
+	"debug/DebugManager"
 	"ace/ace"
 	"libs/jquery.color"
 	"libs/jquery-layout"
@@ -43,11 +46,12 @@ define [
 	TabManager,
 	LayoutManager,
 	FileUploadManager,
+	SavingAreaManager,
 	SpellingManager,
 	SearchManager,
 	Project,
 	User,
-	StandaloneModal,
+	Modal,
 	FileTreeManager,
 	MessageManager,
 	HelpManager,
@@ -56,7 +60,9 @@ define [
 	BackspaceHighjack,
 	FileViewManager,
 	IdeTour,
-	AnalyticsManager
+	AnalyticsManager,
+	TrackChangesManager
+	DebugManager
 ) ->
 
 
@@ -95,8 +101,6 @@ define [
 			ioOptions =
 				reconnect: false
 				"force new connection": true
-			if @userSettings.longPolling
-				ioOptions.transports = ["xhr-polling"]
 			@socket = socket = io.connect null, ioOptions
 
 			@messageManager = new MessageManager(@)
@@ -106,17 +110,21 @@ define [
 			@sideBarView = new SideBarManager(@, $("#sections"))
 			selectElement = @sideBarView.selectElement
 			mainAreaManager = @mainAreaManager = new MainAreaManager(@, $("#content"))
+			@fileTreeManager = new FileTreeManager(@)
 			@editor = new Editor(@)
 			@pdfManager = new PdfManager(@)
 			if @userSettings.autoComplete
 				@autoCompleteManager = new AutoCompleteManager(@)
 			@spellingManager = new SpellingManager(@)
-			@fileTreeManager = new FileTreeManager(@)
 			@fileUploadManager = new FileUploadManager(@)
 			@searchManager = new SearchManager(@)
 			@cursorManager = new CursorManager(@)
 			@fileViewManager = new FileViewManager(@)
 			@analyticsManager = new AnalyticsManager(@)
+			if @userSettings.oldHistory
+				@historyManager = new HistoryManager(@)
+			else
+				@trackChangesManager = new TrackChangesManager(@)
 
 			@setLoadingMessage("Connecting")
 			firstConnect = true
@@ -142,16 +150,46 @@ define [
 				setTimeout(joinProject, 100)
 	
 		showErrorModal: (title, message)->
-			modalOptions =
-				templateId:'genericModalTemplate'
-				isStatic: false
+			new Modal {
 				title: title
-				message:message
-			new Modal modalOptions
+				message: message
+				buttons: [ text: "OK" ]
+			}
 
-		showGenericServerErrorMessage: (message)->
-			new Modal
-				templateId : "genericServerErrorModal"
+		showGenericServerErrorMessage: ()->
+			new Modal {
+				title: "There was a problem talking to the server"
+				message: "Sorry, we couldn't complete your request right now. Please wait a few moments and try again. If the problem persists, please let us know."
+				buttons: [ text: "OK" ]
+			}
+
+		recentEvents: []
+
+		pushEvent: (type, meta = {}) ->
+			@recentEvents.push type: type, meta: meta, date: new Date()
+			if @recentEvents.length > 40
+				@recentEvents.shift()
+
+		reportError: (error, meta = {}) ->
+			meta.client_id = @socket?.socket?.sessionid
+			meta.transport = @socket?.socket?.transport?.name
+			meta.client_now = new Date()
+			meta.recent_events = @recentEvents
+			errorObj = {}
+			if typeof error == "object"
+				for key in Object.getOwnPropertyNames(error)
+					errorObj[key] = error[key]
+			else if typeof error == "string"
+				errorObj.message = error
+			$.ajax
+				url: "/error/client"
+				type: "POST"
+				data: JSON.stringify
+					error: errorObj
+					meta: meta
+				contentType: "application/json; charset=utf-8"
+				headers:
+					"X-Csrf-Token": window.csrfToken
 
 		setLoadingMessage: (message) ->
 			$("#loadingMessage").text(message)
@@ -161,69 +199,13 @@ define [
 
 	_.extend(Ide::, Backbone.Events)
 	window.ide = ide = new Ide()
-	ide.historyManager = new HistoryManager ide
 	ide.projectMembersManager = new ProjectMembersManager ide
 	ide.settingsManager = new SettingsManager ide
 	ide.helpManager = new HelpManager ide
 	ide.hotkeysManager = new HotkeysManager ide
 	ide.layoutManager.resizeAllSplitters()
 	ide.tourManager = new IdeTour ide
+	ide.debugManager = new DebugManager(ide)
 
-	class Modal
-		#templateId, title, message, isStatic, cancelCallback
-		constructor: (options, completeCallback = () -> {})->
-			html = $("##{options.templateId}").html()
-			modal = "<div id='modal' style='display:none'>#{html}</div>"
-			$('body').append(modal)
-			$modal = $('#modal')
-
-			if options.title?
-				$modal.find('h3').text(options.title)
-			if options.message?
-				$modal.find('.message').text(options.message)
-			if options.inputValue?
-				$modal.find('input').val(options.inputValue)
-
-			backdrop = true
-			if options.backdrop?
-				backdrop = options.backdrop
-
-			$modal.modal backdrop:backdrop, show:true, keyboard:true, isStatic:options.isStatic
-			$modal.find('input').focus()
-
-			$modal.find('button').click (e)=>
-				e.preventDefault()
-				$modal.modal('hide')
-				if e.target.className.indexOf("cancel") == -1
-					inputval = $modal.find('input').val()
-					completeCallback(inputval)
-
-			$modal.find('input').keydown (event)=>
-				code = event.keyCode || event.which
-				if code == 13
-					$modal.find('button.primary').click()
-
-			$modal.bind 'hide', ()->
-				if options.cancelCallback?
-					options.cancelCallback()
-				$('#modal').remove()
-
-	ide.savingAreaManager =
-		$savingArea : $('#saving-area')
-		timeOut: undefined
-		saved:->
-			@clearTimeout()
-			$("#savingProblems").hide()
-		saving:->
-			return if @timeOut?
-			@clearTimeout()
-			@timeOut = setTimeout((=>
-				heap?.track "savingShown"
-				$("#savingProblems").show()
-			), 1000)
-
-		clearTimeout:->
-			if @timeOut?
-				clearTimeout @timeOut
-			delete @timeOut
+	ide.savingAreaManager = new SavingAreaManager(ide)
 

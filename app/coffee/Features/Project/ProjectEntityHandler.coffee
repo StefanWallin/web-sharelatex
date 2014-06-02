@@ -13,6 +13,8 @@ logger = require('logger-sharelatex')
 slReqIdHelper = require('soa-req-id')
 docComparitor = require('./DocLinesComparitor')
 projectUpdateHandler = require('./ProjectUpdateHandler')
+DocstoreManager = require "../Docstore/DocstoreManager"
+ProjectGetter = require "./ProjectGetter"
 
 module.exports = ProjectEntityHandler =
 	getAllFolders: (project_id, sl_req_id, callback) ->
@@ -23,7 +25,7 @@ module.exports = ProjectEntityHandler =
 			folders[basePath] = folder
 			processFolder path.join(basePath, childFolder.name), childFolder for childFolder in folder.folders
 
-		Project.findById project_id, (err, project) ->
+		ProjectGetter.getProjectWithoutDocLines project_id, (err, project) ->
 			return callback(err) if err?
 			return callback("no project") if !project?
 			processFolder "/", project.rootFolder[0]
@@ -32,14 +34,31 @@ module.exports = ProjectEntityHandler =
 	getAllDocs: (project_id, sl_req_id, callback) ->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
 		logger.log project_id:project_id, "getting all docs for project"
-		@getAllFolders project_id, sl_req_id, (err, folders) ->
-			return callback(err) if err?
-			docs = {}
-			for folderPath, folder of folders
-				for doc in folder.docs
-					docs[path.join(folderPath, doc.name)] = doc
-			logger.log count:_.keys(docs).length, project_id:project_id, "returning docs for project"
-			callback null, docs
+
+		# We get the path and name info from the project, and the lines and
+		# version info from the doc store.
+		DocstoreManager.getAllDocs project_id, (error, docContentsArray) ->
+			return callback(error) if error?
+
+			# Turn array from docstore into a dictionary based on doc id
+			docContents = {}
+			for docContent in docContentsArray
+				docContents[docContent._id] = docContent
+
+			ProjectEntityHandler.getAllFolders project_id, sl_req_id, (error, folders) ->
+				return callback(error) if error?
+				docs = {}
+				for folderPath, folder of folders
+					for doc in folder.docs
+						content = docContents[doc._id.toString()]
+						docs[path.join(folderPath, doc.name)] = {
+							_id:   doc._id
+							name:  doc.name
+							lines: content.lines
+							rev:   content.rev
+						}
+				logger.log count:_.keys(docs).length, project_id:project_id, "returning docs for project"
+				callback null, docs
 
 	getAllFiles: (project_id, sl_req_id, callback) ->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
@@ -58,17 +77,20 @@ module.exports = ProjectEntityHandler =
 		logger.log sl_req_id: sl_req_id, project_id:project_id, "flushing project to tpds"
 		documentUpdaterHandler = require('../../Features/DocumentUpdater/DocumentUpdaterHandler')
 		documentUpdaterHandler.flushProjectToMongo project_id, undefined, (error) ->
-			Project.findById project_id, (err, project) ->
+			return callback(error) if error?
+			Project.findById project_id, (error, project) ->
 				return callback(error) if error?
 				requests = []
-				self.getAllDocs project_id, (err, docs) ->
+				self.getAllDocs project_id, (error, docs) ->
+					return callback(error) if error?
 					for docPath, doc of docs
 						do (docPath, doc) ->
 							requests.push (callback) ->
-								tpdsUpdateSender.addDoc {project_id:project_id, docLines:doc.lines, path:docPath, project_name:project.name, rev:doc.rev||0},
+								tpdsUpdateSender.addDoc {project_id:project_id, doc_id:doc._id, path:docPath, project_name:project.name, rev:doc.rev||0},
 									sl_req_id,
 									callback
-					self.getAllFiles project_id, (err, files) ->
+					self.getAllFiles project_id, (error, files) ->
+						return callback(error) if error?
 						for filePath, file of files
 							do (filePath, file) ->
 								requests.push (callback) ->
@@ -89,16 +111,29 @@ module.exports = ProjectEntityHandler =
 		logger.log sl_req_id: sl_req_id, project_id: project_id, "removing root doc"
 		Project.update {_id:project_id}, {$unset: {rootDoc_id: true}}, {}, callback
 
+	getDoc: (project_id, doc_id, callback = (error, lines, rev) ->) ->
+		DocstoreManager.getDoc project_id, doc_id, callback
+
 	addDoc: (project_or_id, folder_id, docName, docLines, sl_req_id, callback = (error, doc, folder_id) ->)=>
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
 		Project.getProject project_or_id, "", (err, project) ->
 			logger.log sl_req_id: sl_req_id, project: project._id, folder_id: folder_id, doc_name: docName, "adding doc"
 			return callback(err) if err?
 			confirmFolder project, folder_id, (folder_id)=>
-				doc = new Doc name: docName, lines: docLines
+				doc = new Doc name: docName
 				Project.putElement project._id, folder_id, doc, "doc", (err, result)=>
-					tpdsUpdateSender.addDoc {project_id:project._id, docLines:docLines, path:result.path.fileSystem, project_name:project.name, rev:doc.rev}, sl_req_id, ->
-						callback(err, doc, folder_id)
+					return callback(err) if err?
+					DocstoreManager.updateDoc project._id.toString(), doc._id.toString(), docLines, (err, modified, rev) ->
+						return callback(err) if err? 
+						tpdsUpdateSender.addDoc {
+							project_id:   project._id,
+							doc_id:		  doc._id	
+							path:         result.path.fileSystem,
+							project_name: project.name,
+							rev:          0
+						}, sl_req_id, (err) ->
+							return callback(err) if err?
+							callback(null, doc, folder_id)
 
 	addFile: (project_or_id, folder_id, fileName, path, sl_req_id, callback = (error, fileRef, folder_id) ->)->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
@@ -199,45 +234,31 @@ module.exports = ProjectEntityHandler =
 					if callback?
 						callback(err, folder, parentFolder_id)
 
-	updateDocLines : (project_or_id, doc_id, docLines, sl_req_id, callback = (error) ->)->
-		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
-		Project.getProject project_or_id, "", (err, project)->
+	updateDocLines : (project_id, doc_id, lines, callback = (error) ->)->
+		ProjectGetter.getProjectWithoutDocLines project_id, (err, project)->
 			return callback(err) if err?
 			return callback(new Errors.NotFoundError("project not found")) if !project?
-			project_id = project._id
-			if err?
-				logger.err err:err,project_id:project_id, "error finding project"
-				callback err
-			else if !project?
-				logger.err project_id:project_id, doc_id:doc_id, err: new Error("project #{project_id} could not be found for doc #{doc_id}")
-				callback "could not find project #{project_id}"
-			else
-				projectLocator.findElement {project:project, element_id:doc_id, type:"docs"}, (err, doc, path)->
+			logger.log project_id: project_id, doc_id: doc_id, "updating doc lines"
+			projectLocator.findElement {project:project, element_id:doc_id, type:"docs"}, (err, doc, path)->
+				if err?
+					logger.error err: err, doc_id: doc_id, project_id: project_id, lines: lines, "error finding doc while updating doc lines"
+					return callback err
+				if !doc?
+					error = new Errors.NotFoundError("doc not found")
+					logger.error err: error, doc_id: doc_id, project_id: project_id, lines: lines, "doc not found while updating doc lines"
+					return callback(error)
+
+				DocstoreManager.updateDoc project_id, doc_id, lines, (err, modified, rev) ->
 					if err?
-						logger.err "error putting doc #{doc_id} in project #{project_id} #{err}"
-						callback err
-					else if docComparitor.areSame docLines, doc.lines
-						logger.log sl_req_id: sl_req_id, docLines:docLines, project_id:project_id, doc_id:doc_id, rev:doc.rev, "old doc lines are same as the new doc lines, not updating them"
-						callback()
+						logger.error err: err, doc_id: doc_id, project_id:project_id, lines: lines, "error sending doc to docstore"
+						return callback(err)
+
+					if modified
+						# Don't need to block for marking as updated
+						projectUpdateHandler.markAsUpdated project_id
+						tpdsUpdateSender.addDoc {project_id:project_id, path:path.fileSystem, doc_id:doc_id, project_name:project.name, rev:rev}, callback
 					else
-						logger.log sl_req_id: sl_req_id, project_id:project_id, doc_id:doc_id, docLines: docLines, oldDocLines: doc.lines, rev:doc.rev, "updating doc lines"
-						conditons = _id:project_id
-						update = {$set:{}, $inc:{}}
-						changeLines = {}
-						changeLines["#{path.mongo}.lines"] = docLines
-						inc = {}
-						inc["#{path.mongo}.rev"] = 1
-						update["$set"] = changeLines
-						update["$inc"] = inc
-						Project.update conditons, update, {}, (err, second)->
-							if(err)
-								logger.err(sl_req_id:sl_req_id, doc_id:doc_id, project_id:project_id, err:err, "error saving doc to mongo")
-								callback(err)
-							else
-								logger.log sl_req_id:sl_req_id, doc_id:doc_id, project_id:project_id, newDocLines:docLines, oldDocLines:doc.lines,	 "doc saved to mongo"
-								rev = doc.rev+1
-								projectUpdateHandler.markAsUpdated project_id
-							tpdsUpdateSender.addDoc {project_id:project_id, path:path.fileSystem, docLines:docLines, project_name:project.name, rev:rev}, sl_req_id, callback
+						callback()
 
 	moveEntity: (project_id, entity_id, folder_id, entityType, sl_req_id, callback = (error) ->)->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
@@ -283,6 +304,27 @@ module.exports = ProjectEntityHandler =
 							return callback(error) if error?
 							callback null
 
+
+	renameEntity: (project_id, entity_id, entityType, newName, callback)->
+		logger.log(entity_id: entity_id, project_id: project_id, ('renaming '+entityType))
+		if !entityType?
+			logger.err err: "No entityType set", project_id: project_id, entity_id: entity_id
+			return callback("No entityType set")
+		entityType = entityType.toLowerCase()
+		Project.findById project_id, (err, project)=>
+			projectLocator.findElement {project:project, element_id:entity_id, type:entityType}, (err, entity, path, folder)=>
+				if err?
+					return callback err
+				conditons = {_id:project_id}
+				update = "$set":{}
+				namePath = path.mongo+".name"
+				update["$set"][namePath] = newName
+				endPath = path.fileSystem.replace(entity.name, newName)
+				tpdsUpdateSender.moveEntity({project_id:project_id, startPath:path.fileSystem, endPath:endPath, project_name:project.name, rev:entity.rev})
+				Project.update conditons, update, {}, (err)->
+					if callback?
+						callback err
+
 	_cleanUpEntity: (project, entity, entityType, sl_req_id, callback = (error) ->) ->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
 
@@ -307,7 +349,13 @@ module.exports = ProjectEntityHandler =
 
 		unsetRootDocIfRequired (error) ->
 			return callback(error) if error?
-			require('../../Features/DocumentUpdater/DocumentUpdaterHandler').deleteDoc project_id, doc_id, callback
+			require('../../Features/DocumentUpdater/DocumentUpdaterHandler').deleteDoc project_id, doc_id, (error) ->
+				return callback(error) if error?
+				ProjectEntityHandler._insertDeletedDocReference project._id, doc, (error) ->
+					return callback(error) if error?
+					DocstoreManager.deleteDoc project_id, doc_id, (error) ->
+						return callback(error) if error?
+						callback()
 
 	_cleanUpFile: (project, file, sl_req_id, callback = (error) ->) ->
 		{callback, sl_req_id} = slReqIdHelper.getCallbackAndReqId(callback, sl_req_id)
@@ -344,6 +392,18 @@ module.exports = ProjectEntityHandler =
 			model.update conditons, pullUpdate, {}, (err)->
 				if callback?
 					callback(err)
+
+	_insertDeletedDocReference: (project_id, doc, callback = (error) ->) ->
+		Project.update {
+			_id: project_id
+		}, {
+			$push: {
+				deletedDocs: {
+					_id:  doc._id
+					name: doc.name
+				}
+			}
+		}, {}, callback
 
 confirmFolder = (project, folder_id, callback)->
 	logger.log folder_id:folder_id, project_id:project._id, "confirming folder in project"

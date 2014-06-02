@@ -26,13 +26,13 @@ UserSchema = new Schema
 							pdfViewer   :   {type : String, default: "pdfjs"}
 						}
 	features		  : {
-							collaborators: {type:Number, default:1}
-							versioning: {type:Boolean, default:false}
-							dropbox: {type:Boolean, default:false}
+							collaborators: { type:Number,  default: Settings.defaultFeatures.collaborators }
+							versioning:    { type:Boolean, default: Settings.defaultFeatures.versioning }
+							dropbox:       { type:Boolean, default: Settings.defaultFeatures.dropbox }
 						}
 	featureSwitches	  : {
 							dropbox: {type:Boolean, default:true},
-							longPolling: {type:Boolean, default:false}
+							oldHistory: {type:Boolean}
 						}
 	referal_id : {type:String, default:() -> uuid.v4().split("-")[0]}
 	refered_users: [ type:ObjectId, ref:'User' ]

@@ -22,7 +22,7 @@ subFolder1 = name:"subFolder1", _id:"123asdjoij"
 
 rootFolder =
 	_id : "123sdskd"
-	docs:[doc1, doc2, rootDoc]
+	docs:[doc1, doc2, null, rootDoc]
 	fileRefs:[file1]
 	folders:[subFolder1, subFolder]
 
@@ -227,7 +227,7 @@ describe 'project model', ->
 			user_id = "123jojoidns"
 			stubbedProject = {name:"findThis"}
 			projects = [{name:"notThis"}, {name:"wellll"}, stubbedProject, {name:"Noooo"}]	
-			Project.findAllUsersProjects = sinon.stub().callsArgWith(2, projects)
+			Project.findAllUsersProjects = sinon.stub().callsArgWith(2, null, projects)
 			@locator.findUsersProjectByName user_id, stubbedProject.name.toLowerCase(), (err, project)->
 				project.should.equal stubbedProject
 				done()
@@ -236,7 +236,7 @@ describe 'project model', ->
 			user_id = "123jojoidns"
 			stubbedProject = {name:"findThis"}
 			projects = [{name:"notThis"}, {name:"wellll"}, {name:"Noooo"}]	
-			Project.findAllUsersProjects = sinon.stub().callsArgWith(2, projects, [stubbedProject])
+			Project.findAllUsersProjects = sinon.stub().callsArgWith(2, null, projects, [stubbedProject])
 			@locator.findUsersProjectByName user_id, stubbedProject.name.toLowerCase(), (err, project)->
 				project.should.equal stubbedProject
 				done()

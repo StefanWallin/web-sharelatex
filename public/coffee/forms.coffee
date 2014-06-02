@@ -31,9 +31,12 @@ require [
 				success: (data)->
 					if data.message?
 						new Message data.message
+						ga('send', 'event', 'register', 'failure', data.message)
 					else
+						ga('send', 'event', 'register', 'success')
 						window.location = data.redir || "/project"
 				
+
 
 	$('#registerFormShort').validate shortRegisterFormRules
 
@@ -79,25 +82,46 @@ require [
 			success: (data)->
 				if data.message
 					new Message data.message
+					ga('send', 'event', 'login', 'failure', data.message)
 				else if data.redir
 					window.location.href = data.redir
+					ga('send', 'event', 'login', 'success')
 				else
+					ga('send', 'event', 'login', 'success')
 					window.location.href = '/project'
 
 	$('form#passwordReset').submit (event)->
 		event.preventDefault()
 		formData = $(this).serialize()
 		$.ajax
-			url: "/user/passwordReset"
+			url: "/user/password/reset"
 			type:'POST'
 			data: formData
 			success: (data)->
-				if data.message
-					new Message data.message
-				else if data.redir
-					window.location.href = data.redir
-				else
-					window.location.href = '/'
+				new Message text:"You have been sent an email to complete your password reset."
+			error:(data)->
+				message = JSON.parse(data?.responseText)?.message
+				new Message type:"error", text: message || "Something went wrong processing your request."
+	
+
+	$('form#setPasswordReset').validate
+		rules:
+			password:
+				required: true
+		messages:
+            password: "Password is required"
+		errorElement: 'div'
+		submitHandler: (form)->
+			event.preventDefault()
+			formData = $(form).serialize()
+			$.ajax
+				url: "/user/password/set"
+				type:'POST'
+				data: formData
+				success: (data)->
+					new Message text:"Your password has been reset. <a href='/login'>Login here</a>."
+				error:(data)->
+					new Message type:"error", text:"Something went wrong processing your request."
 
 
 	$('a#deleteUserAccount').click (e)->
@@ -148,15 +172,9 @@ require [
 
 	$('form#userSettings').validate
 		rules:
-			newPassword1:
-				minlength: 1
-			newPassword2:
-				equalTo: "#newPassword1"
-		messages:
-			newPassword1:
-				minlength: "1 character minimum"
-			newPassword2:
-				equalTo: "Passwords don't match"
+			email:
+				required: true
+				email: true
 		highlight: (element, errorClass, validClas)->
 			$(element).parents("div[class='clearfix']").addClass("error")
 							 
@@ -167,14 +185,19 @@ require [
 			formData = $(form).serialize()
 			$.ajax
 				url: '/user/settings'
-				type:'POST'
+				type: 'POST'
 				data: formData
 				success: (data)->
 					if data.message
 						displayMessage data
 					else
 						new Message {text:"Your settings have been saved"}
+				error:(data)->
+					message = JSON.parse(data?.responseText)?.message
+					new Message type:"error", text: message || "Something went wrong processing your request."
 
+
+				
 	class Message
 		constructor: (message)->
 			aClose = $('<a></a>').addClass('close').attr('href','#').text('x')

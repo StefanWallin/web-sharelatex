@@ -4,12 +4,14 @@ should = chai.should()
 expect = chai.expect
 modulePath = "../../../../app/js/Features/Downloads/ProjectZipStreamManager.js"
 SandboxedModule = require('sandboxed-module')
+EventEmitter = require("events").EventEmitter
 
 describe "ProjectZipStreamManager", ->
 	beforeEach ->
 		@project_id = "project-id-123"
 		@callback = sinon.stub()
-		@archive = { }
+		@archive = 
+			on:->
 		@ProjectZipStreamManager = SandboxedModule.require modulePath, requires:
 			"archiver": @archiver = sinon.stub().returns @archive
 			"logger-sharelatex": @logger = {error: sinon.stub(), log: sinon.stub()}
@@ -87,7 +89,7 @@ describe "ProjectZipStreamManager", ->
 				"/chapters/chapter1.tex":
 					lines: ["chapter1", "content"]
 			@ProjectEntityHandler.getAllDocs = sinon.stub().callsArgWith(1, null, @docs)
-			@archive.append = sinon.stub().callsArg(2)
+			@archive.append = sinon.stub()
 			@ProjectZipStreamManager.addAllDocsToArchive @project_id, @archive, (error) =>
 				@callback(error)
 				done()
@@ -111,14 +113,16 @@ describe "ProjectZipStreamManager", ->
 				"/folder/picture.png":
 					_id: "file-id-2"
 			@streams =
-				"file-id-1" : "stream-mock-1"
-				"file-id-2" : "stream-mock-2"
+				"file-id-1" : new EventEmitter()
+				"file-id-2" : new EventEmitter()
 			@ProjectEntityHandler.getAllFiles = sinon.stub().callsArgWith(1, null, @files)
-			@archive.append = sinon.stub().callsArg(2)
+			@archive.append = sinon.stub()
 			@FileStoreHandler.getFileStream = (project_id, file_id, {}, callback) =>
 				callback null, @streams[file_id]
 			sinon.spy @FileStoreHandler, "getFileStream"
 			@ProjectZipStreamManager.addAllFilesToArchive @project_id, @archive, @callback
+			for path, stream of @streams
+				stream.emit "end"
 
 		it "should get the files for the project", ->
 			@ProjectEntityHandler.getAllFiles.calledWith(@project_id).should.equal true

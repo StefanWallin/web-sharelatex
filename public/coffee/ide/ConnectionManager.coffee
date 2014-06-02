@@ -8,14 +8,16 @@ define [
 			@socket = @ide.socket
 			@socket.on "connect", () =>
 				@connected = true
+				@ide.pushEvent("connected")
 				@hideModal()
 				@cancelReconnect()
 
 			@socket.on 'disconnect', () =>
 				@connected = false
+				@ide.pushEvent("disconnected")
 				@ide.trigger "disconnect"
 				setTimeout(=>
-					mixpanel?.track("disconnected")
+					ga('send', 'event', 'editor-interaction', 'disconnect')
 				, 2000)
 
 				if !@forcedDisconnect
@@ -31,6 +33,13 @@ define [
 				e.preventDefault()
 				@tryReconnect()
 			@hideModal()
+
+		reconnectImmediately: () ->
+			@disconnect()
+			@tryReconnect()
+
+		disconnect: () ->
+			@socket.disconnect()
 				
 		showModalAndStartAutoReconnect: () ->
 			@hideModal()

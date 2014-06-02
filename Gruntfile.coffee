@@ -27,6 +27,10 @@ module.exports = (grunt) ->
 			app: 
 				src: 'app.coffee'
 				dest: 'app.js'
+				
+			BackgroundJobsWorker: 
+				src: 'BackgroundJobsWorker.coffee'
+				dest: 'BackgroundJobsWorker.js'
 
 			sharejs:
 				options:
@@ -84,6 +88,7 @@ module.exports = (grunt) ->
 					paths:
 						"underscore": "libs/underscore"
 						"jquery": "libs/jquery"
+						"moment": "libs/moment"
 					shim:
 						"libs/backbone":
 							deps: ["libs/underscore"]

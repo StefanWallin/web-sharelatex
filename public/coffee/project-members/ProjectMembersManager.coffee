@@ -3,9 +3,10 @@ define [
 	"models/ProjectMemberList"
 	"account/AccountManager"
 	"utils/Modal"
+	"moment"
 	"libs/backbone"
 	"libs/mustache"
-], (User, ProjectMemberList, AccountManager, Modal) ->
+], (User, ProjectMemberList, AccountManager, Modal, moment) ->
 	INFINITE_COLLABORATORS = -1
 
 	class ProjectMembersManager
@@ -20,12 +21,16 @@ define [
 					name: "Share"
 					content : $(@templates.userPanel)
 					lock: true
+					onShown: () =>
+						@publishProjectView?.refreshPublishStatus()
 
 			setupPublish = _.once =>
-				@publishProjectView = new PublishProjectView
-					ide: @ide
-					el: $("#publishProject")
-				@publishProjectView.render()
+				if @ide.security? and @ide.security.permissionsLevel == "owner"
+					@publishProjectView = new PublishProjectView
+						ide: @ide
+						el: $("#publishProject")
+					@publishProjectView.render()
+
 			setupArea()
 			if @ide?
 				@ide.on "afterJoinProject", (project) =>
@@ -50,10 +55,8 @@ define [
 						@view.options.showAdminControls = false
 					@view.render()
 
-					if @ide.project.get("owner")
+					if @ide.project.get("owner") == @ide.user and @ide.user.get("id") != "openUser"
 						setupPublish()
-
-
 
 					if @ide.project.get("owner") == @ide.user or @ide.project.get("publicAccesLevel") != "private"
 						if !@socialView?
@@ -74,14 +77,18 @@ define [
 			@ide.socket.emit "removeUserFromProject", member.id
 
 		addMember: (email, privileges) ->
+			console.log "Adding member", email
 			@ide.socket.emit "addUserToProject", email, privileges, (error, added) =>
 				if error?
 					@ide.showGenericServerErrorMessage()
 					return
 				if !added
+					console.log "got response", error, added
+					ga('send', 'event', 'subscription-funnel', 'askToUpgrade', "projectMemebrs")
 					AccountManager.askToUpgrade @ide,
 						why: "to add additional collaborators"
-						onUpgrade: () => @addMember(email, privileges)
+						onUpgrade: () => 
+							ga('send', 'event', 'subscription-funnel', 'upgraded-free-trial', "projectMemebrs")
 
 		afterMemberRemoved: (memberId) ->
 			for member in @members.models
@@ -167,32 +174,90 @@ define [
 			@options.manager.removeMember(@model)
 
 	PublishProjectView = Backbone.View.extend
-		template: $("#publishProject").html()
+		template: $("#publishProjectTemplate").html()
 
 		events:
 			"click #publishProjectAsTemplate": "publishProjectAsTemplate"
+			"click #republishProjectAsTemplate": "publishProjectAsTemplate"
 			"click #unPublishProjectAsTemplate": "unPublishProjectAsTemplate"
 			"blur #projectDescription"	: "updateDescription"
 
 		initialize: () ->
 			@ide = @options.ide
 			@model = @ide.project
-			_.bindAll(this, "render");
-			this.model.bind('change', this.render)
+			@render()
 
 		render: ->
-			viewModel = description:@model.get("description")
-			$(@el).html $(Mustache.to_html(@template, viewModel))
+			viewModel = 
+				description: @model.get("description")
+				canonicalUrl: @model.get("template.canonicalUrl")
+				isPublished: @model.get("template.isPublished")
+				publishedDate: moment(@model.get("template.publishedDate")).format("Do MMM YYYY, h:mm a")
+
+			@$el.html $(Mustache.to_html(@template, viewModel))
+			@publishedArea = $('.show-when-published')
+			@unpublishedArea = $('.show-when-unpublished')
+			$('#problemWithPublishingArea').hide()
+			$('#publishWorkingArea').hide()
+
+		refreshView: () ->
+			if @model.get("template.isPublished")
+				@$("a#templateLink").attr("href", @model.get("template.canonicalUrl"))
+				@publishedArea.show()
+			else
+				@unpublishedArea.show()
+
+		refreshPublishStatus: ->
+			@showWorking()
+			@ide.socket.emit "getPublishedDetails", @ide.user.get("id"), (err, details)=>
+				@hideWorking()
+				if err?
+					return @showError()
+
+				@model.set("template.isPublished", details.exists)
+				if details.exists
+					@model.set("template.canonicalUrl", details.canonicalUrl)
+					@model.set("template.publishedDate", details.publishedDate)
+
+				@refreshView()
+
+		showError: ->
+			@publishedArea.hide()
+			@unpublishedArea.hide()
+			$('#problemWithPublishingArea').show()
+
+		showWorking: ->
+			@publishedArea.hide()
+			@unpublishedArea.hide()
+			$('#publishWorkingArea').show()
+
+		hideWorking: ->
+			$('#publishWorkingArea').hide()
+
+		publishProjectAsTemplate: ->
+			@showWorking()
+			@unpublishedArea.hide()
+			@publishedArea.hide()
+			@ide.socket.emit "publishProjectAsTemplate", @ide.user.get("id"), (err)=>
+				@hideWorking()
+				if err?
+					@showError()
+				else 
+					@refreshPublishStatus()
+
+		unPublishProjectAsTemplate: ->
+			@showWorking()
+			@publishedArea.hide()
+			@ide.socket.emit "unPublishProjectAsTemplate", @ide.user.get("id"), (err)=>
+				@hideWorking()
+				if err?
+					@showError()
+				else 
+					@refreshPublishStatus()
 
 		updateDescription: ->
 			newDescription = $('#projectDescription').val()
-			this.model.set("description", newDescription)
-
-		publishProjectAsTemplate: ->
-			@ide.socket.emit "publishProjectAsTemplate", @ide.user.get("id"), ->
-
-		unPublishProjectAsTemplate: ->
-			@ide.socket.emit "unPublishProjectAsTemplate", @ide.user.get("id"), ->
+			@model.set("description", newDescription)
 
 	SocialSharingView = Backbone.View.extend
 		template: $("#socialSharingTemplate").html()
@@ -207,7 +272,7 @@ define [
 			@ide = @options.ide
 
 		url: (medium) ->
-			"https://www.sharelatex.com/project/#{@ide.project.get("id")}" +
+			"#{window.sharelatex.siteUrl}/project/#{@ide.project.get("id")}" +
 			"?r=#{@ide.user.get("referal_id")}&rs=ps&rm=#{medium}" # Referal source = public share				
 
 		render: ->
@@ -219,12 +284,12 @@ define [
 
 					url = "https://www.facebook.com/dialog/feed?link=#{encodeURIComponent(@url("fb"))}&" +
 						  "app_id=148710621956179&" +
-						  "picture=https://www.sharelatex.com/brand/logo/logo-128.png&" +
+						  "picture=#{window.sharelatex.siteUrl}/brand/logo/logo-128.png&" +
 						  "name=#{@ide.project.get("name")}&" +
 						  "caption=My LaTeX project (#{@ide.project.get("name")}) is available online on ShareLaTeX&" +
-						  "redirect_uri=http://www.sharelatex.com&" +
+						  "redirect_uri=#{window.sharelatex.siteUrl}&" +
 						  "display=popup"
-					mixpanel?.track("Project Shared", { method: "facebook" })
+					ga('send', 'event', 'editor-interaction', 'project-shared', "facebook")
 					window.open(
 						url
 						""
@@ -234,7 +299,7 @@ define [
 		postToTwitter: () ->
 			@ensurePublic (error, success) =>
 				if success
-					mixpanel?.track("Project Shared", { method: "twitter" })
+					ga('send', 'event', 'editor-interaction', 'project-shared', "twitter")
 					window.open(
 						"https://www.twitter.com/share/?text=Check out my online LaTeX Project: #{@ide.project.get("name")}&url=#{encodeURIComponent(@url("t"))}"
 						""
@@ -244,7 +309,7 @@ define [
 		postToGoogle: () ->
 			@ensurePublic (error, success) =>
 				if success
-					mixpanel?.track("Project Shared", { method: "google_plus" })
+					ga('send', 'event', 'editor-interaction', 'project-shared', "google-plus")
 					window.open(
 						"https://plus.google.com/share?url=#{encodeURIComponent(@url("gp"))}"
 						""
@@ -254,7 +319,7 @@ define [
 		shareUrl: () ->
 			@ensurePublic (error, success) =>
 				if success
-					mixpanel?.track("Project Shared", { method: "url" })
+					ga('send', 'event', 'editor-interaction', 'project-shared', "url")
 					Modal.createModal
 						el: $(
 							"<p>You can share you project with your friends and colleagues via this URL:</p>" +

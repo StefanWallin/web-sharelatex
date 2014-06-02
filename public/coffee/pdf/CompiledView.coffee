@@ -37,6 +37,7 @@ define [
 			compileSuccess: $('#compileSuccessTemplate').html()
 			compileFailed: $('#compileFailedTemplate').html()
 			compileError: $('#compileErrorTemplate').html()
+			compileTimeout: $('#compileTimeoutTemplate').html()
 			outputFileLink: $('#outputFileLinkTemplate').html()
 		
 		events:
@@ -51,6 +52,7 @@ define [
 			"click #splitViewButton": ->
 				$.localStorage("layout.pdf", "split")
 				@options.manager.switchToSplitView()
+			"click .delete-cached-files > a": -> @options.manager.deleteCachedFiles()
 
 		initialize: (@options) ->
 			@ide = @options.ide
@@ -63,6 +65,7 @@ define [
 				PdfView = PdfjsView
 				@pdfjs = true
 			@pdfView = new PdfView(manager: @)
+			@pdfView.on "dblclick", (e) => @trigger "dblclick", e
 
 		render: () ->
 			@setElement(@templates.pdfPanel)
@@ -77,7 +80,7 @@ define [
 			@pdfView.onResize?()
 
 		updateLog: (options) ->
-			{pdfExists, logExists, compileErrors, rawLog} = options
+			{pdfExists, logExists, compileErrors, rawLog, timedOut, systemError} = options
 
 			if @errorViews?
 				for errorView in @errorViews
@@ -90,7 +93,7 @@ define [
 			logButtonHtml = "Logs"
 
 			if compileErrors?
-				for error in compileErrors.all
+				for error in compileErrors.errors.concat(compileErrors.warnings).concat(compileErrors.typesetting)
 					errorView = new LatexErrorView(@options.manager.ide, error)
 					errorView.render()
 					@errorViews.push(errorView)
@@ -108,13 +111,17 @@ define [
 
 			@$("#showLog").html(logButtonHtml)
 
-			if !pdfExists
-				if !compileErrors?
-					errorLogs.prepend($(@templates.compileError))
-				else
-					errorLogs.prepend($(@templates.compileFailed))
+			if timedOut
+				errorLogs.prepend($(@templates.compileTimeout))
+			else if systemError
+				errorLogs.prepend($(@templates.compileError))
+			else if !pdfExists
+				errorLogs.prepend($(@templates.compileFailed))
 			else if pdfExists && compileErrors.all.length == 0
 				errorLogs.prepend($(@templates.compileSuccess))
+			
+			errorLogs.find(".js-clear-cache").on "click", () =>
+				@options.manager.deleteCachedFiles()
 
 			@$("#rawLogArea").find("pre").text(rawLog)
 			
@@ -212,5 +219,11 @@ define [
 		undelegateEvents: () ->
 			Backbone.View::undelegateEvents.apply(this, arguments)
 			@pdfView.undelegateEvents()
+
+		highlightInPdf: (args...) ->
+			@pdfView.highlightInPdf?(args...)
+
+		getPdfPosition: () ->
+			@pdfView.getPdfPosition?()
 
 			

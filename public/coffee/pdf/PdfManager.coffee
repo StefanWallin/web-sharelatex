@@ -1,17 +1,19 @@
 define [
 	"utils/Modal"
 	"pdf/CompiledView"
+	"pdf/SyncButtonsView"
 	"libs/latex-log-parser"
 	"libs/jquery.storage"
 	"libs/underscore"
 	"libs/backbone"
-], (Modal, CompiledView, LogParser) ->
+], (Modal, CompiledView, SyncButtonsView, LogParser) ->
 	class PdfManager
 		templates:
 			pdfLink: $("#pdfSideBarLinkTemplate").html()
 
 		constructor: (@ide) ->
 			_.extend @, Backbone.Events
+			@createSyncButtons()
 			@createPdfPanel()
 			@ide.editor.aceEditor.commands.addCommand
 				name: "compile",
@@ -24,6 +26,7 @@ define [
 
 		createPdfPanel: () ->
 			@view = new CompiledView manager: @, ide: @ide
+			@view.on "dblclick", (e) => @syncToCode(e)
 			@view.render()
 			if $.localStorage("layout.pdf") == "flat"
 				@switchToFlatView()
@@ -33,6 +36,15 @@ define [
 				@switchToFlatView()
 			else
 				@switchToSplitView()
+
+		createSyncButtons: () ->
+			unless @ide.userSettings.pdfViewer == "native"
+				@syncButtonsView = new SyncButtonsView(ide: @ide)
+				@syncButtonsView.on "click:sync-code-to-pdf", () =>
+					@syncToPdf()
+				@syncButtonsView.on "click:sync-pdf-to-code", () =>
+					@syncToCode()
+				@syncButtonsView.hide()
 
 		switchToFlatView: (options = {showPdf: false}) ->
 			@teardownSplitView()
@@ -84,6 +96,11 @@ define [
 
 			@view.undelegateEvents()
 			@view.delegateEvents()
+
+			@ide.editor.$splitter.append(
+				@syncButtonsView?.$el
+			)
+
 			setTimeout(@ide.layoutManager.resizeAllSplitters, 100)
 
 		teardownSplitView: () ->
@@ -107,11 +124,13 @@ define [
 				@ide.on "afterJoinProject", () =>
 					@_refreshPdfWhenProjectIsLoaded(opts)
 
-		_refreshPdfWhenProjectIsLoaded: (opts) ->
+		_refreshPdfWhenProjectIsLoaded: (opts = {}) ->
 			doneCompiling = _.once =>
 				@compiling = false
 				@view.doneCompiling()
+				@syncButtonsView?.show()
 			setTimeout doneCompiling, 1000 * 60
+
 			if !@ide.project.get("rootDoc_id")?
 				new Modal
 					title: "No root document selected"
@@ -122,18 +141,25 @@ define [
 					}]
 			else if !@compiling
 				@view.onCompiling()
+				@syncButtonsView?.hide()
 				@compiling = true
-				@ide.socket.emit "pdfProject", opts, (err, pdfExists, outputFiles) =>
+				@_doCompile opts.isAutoCompile, (error, status, outputFiles) =>
 					@compiling = false
 					doneCompiling()
 
-					if err? and err.rateLimitHit
+					if error?
+						@view.updateLog(systemError: true)
+						@view.unsetPdf()
+						@view.showLog()
+					else if status == "timedout"
+						@view.updateLog(timedOut: true)
+						@view.unsetPdf()
+						@view.showLog()
+					else if status == "autocompile-backoff"
 						@view.showBeforeCompile()
 					else
-						if err?
-							@view.updateLog(pdfExists: false, logExists: false)
-						else
-							@fetchLogAndUpdateView(pdfExists)
+						pdfExists = (status == "success")
+						@fetchLogAndUpdateView(pdfExists)
 
 						if pdfExists
 							@view.setPdf("/project/#{@ide.project_id}/output/output.pdf?cache_bust=#{Date.now()}")
@@ -141,10 +167,26 @@ define [
 						else
 							@view.unsetPdf()
 							@view.showLog()
+							@syncButtonsView?.hide()
 
 					if outputFiles?
-						console.log "outputFiles", outputFiles
 						@view.showOutputFileDownloadLinks(outputFiles)
+
+		_doCompile: (isAutoCompile, callback = (error, status, outputFiles) ->) ->
+			url = "/project/#{@ide.project_id}/compile"
+			if isAutoCompile
+				url += "?auto_compile=true"
+			$.ajax(
+				url: url
+				type: "POST"
+				headers:
+					"X-CSRF-Token": window.csrfToken
+				dataType: 'json'
+				success: (body, status, response) ->
+					callback null, body.status, body.outputFiles
+				error: (error) ->
+					callback error
+			)
 
 		fetchLogAndUpdateView: (pdfExists) ->
 			$.ajax(
@@ -188,3 +230,74 @@ define [
 
 		downloadPdf: () ->
 			@ide.mainAreaManager.setIframeSrc "/project/#{@ide.project_id}/output/output.pdf?popupDownload=true"
+
+		deleteCachedFiles: () ->
+			modal = new Modal
+				title: "Clear cache?"
+				message: "This will clear all hidden LaTeX files like .aux, .bbl, etc, from our compile server. You generally don't need to do this unless you're having trouble with references. Your project files will not be deleted or changed."
+				buttons: [{
+					text: "Cancel"
+				}, {
+					text: "Clear from cache",
+					class: "btn-primary",
+					close: false
+					callback: ($button) =>
+						$button.text("Clearing...")
+						$button.prop("disabled", true)
+						$.ajax({
+							url: "/project/#{@ide.project_id}/output"
+							type: "DELETE"
+							headers:
+								"X-CSRF-Token": window.csrfToken
+							complete: () -> modal.remove()
+						})
+
+				}]
+
+		syncToCode: (e) ->
+			if !e? 
+				e = @view.getPdfPosition()
+				return if !e?
+				# It's not clear exactly where we should sync to if it was directly
+				# clicked on, but a little bit down from the very top seems best.
+				e.y = e.y + 80
+
+			$.ajax {
+				url: "/project/#{@ide.project_id}/sync/pdf"
+				data:
+					page: e.page + 1
+					h: e.x.toFixed(2)
+					v: e.y.toFixed(2)
+				type: "GET"
+				success: (response) =>
+					data = JSON.parse(response)
+					if data.code and data.code.length > 0
+						file = data.code[0].file
+						line = data.code[0].line
+						@ide.fileTreeManager.openDocByPath(file, line)
+			}
+
+		syncToPdf: () ->
+			entity_id = @ide.editor.getCurrentDocId()
+			file = @ide.fileTreeManager.getPathOfEntityId(entity_id)
+			
+			# If the root file is folder/main.tex, then synctex sees the
+			# path as folder/./main.tex
+			rootFolderPath = @ide.fileTreeManager.getRootFolderPath()
+			if rootFolderPath != ""
+				file = file.replace(RegExp("^#{rootFolderPath}"), "#{rootFolderPath}/.")
+
+			line = @ide.editor.getCurrentLine()
+			column = @ide.editor.getCurrentColumn()
+
+			$.ajax {
+				url: "/project/#{@ide.project_id}/sync/code"
+				data:
+					file: file
+					line: line + 1
+					column: column
+				type: "GET"
+				success: (response) =>
+					data = JSON.parse(response)
+					@view.highlightInPdf(data.pdf or [])
+			}

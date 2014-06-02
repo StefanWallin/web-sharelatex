@@ -10,7 +10,7 @@ module.exports = ProjectGetter =
 		excludes = {}
 		for i in [1..@EXCLUDE_DEPTH]
 			excludes["rootFolder#{Array(i).join(".folder")}.docs.lines"] = 0
-		db.projects.find _id: ObjectId(project_id), excludes, (error, projects = []) ->
+		db.projects.find _id: ObjectId(project_id.toString()), excludes, (error, projects = []) ->
 			callback error, projects[0]
 
 	getProject: (query, projection, callback = (error, project) ->) ->
@@ -58,4 +58,4 @@ module.exports = ProjectGetter =
 							project.collaberator_refs.push user
 						callback null, project
 
-		async.series jobs, (error) -> callback error, project
+		async.parallelLimit jobs, 3, (error) -> callback error, project

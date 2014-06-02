@@ -17,6 +17,8 @@ define [
 
 			new DropboxSettingsManager @ide
 
+			@setFontSize()
+
 			if @ide?
 				@ide.on "afterJoinProject", (project) =>
 					@project = project
@@ -102,6 +104,15 @@ define [
 					$confirm.off 'click'
 				$modal.find('.cancel').click (e)->
 					$modal.modal('hide')
+
+		setFontSize: () ->
+			@fontSizeCss = $("<style/>")
+			@fontSizeCss.text """
+				.ace_editor, .ace_content {
+					font-size: #{window.userSettings.fontSize}px;
+				}
+			"""
+			$(document.body).append(@fontSizeCss)
 	
 		bindToProjectName: () ->
 			@project.on "change:name", (project, newName) ->
@@ -115,7 +126,10 @@ define [
 				# http://stackoverflow.com/questions/6692031/check-if-event-is-triggered-by-a-human
 				if e.originalEvent?
 					if @ide.isAllowedToDoIt "readAndWrite"
-						@project.set("name", e.target.value)
+						newName = e.target.value?.trim()
+						$("input.projectName").val(newName)
+						@project.set("name", newName)
+
 
 		bindToCompiler: ->
 			$('select#compilers').val(@project.get("compiler"))

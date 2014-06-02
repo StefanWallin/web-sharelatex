@@ -75,8 +75,9 @@ define [
 			children.add(entity)
 
 		openDoc: (doc, line) ->
+			return if !doc?
 			doc_id = doc.id or doc
-			@ide.editor.openDoc(doc_id, line: line)
+			@trigger "open:doc", doc_id, line: line
 			@selectEntity(doc_id)
 			$.localStorage "doc.open_id.#{@project_id}", doc_id
 
@@ -86,8 +87,7 @@ define [
 			@openDoc(doc_id, line)
 
 		openFile: (file) ->
-			@ide.mainAreaManager.change('file')
-			@ide.fileViewManager.showFile(file)
+			@trigger "open:file", file
 			@selectEntity(file.id)
 
 		openFolder: (folder) ->
@@ -98,7 +98,7 @@ define [
 				@views[@selected_entity_id].deselect()
 			@selected_entity_id = entity_id
 			@ide.sideBarView.deselectAll()
-			@views[entity_id].select()
+			@views[entity_id]?.select()
 
 		getEntity: (entity_id) ->
 			@views[entity_id]?.model
@@ -121,6 +121,7 @@ define [
 			lastPart = parts.pop()
 
 			getChildWithName = (folder, name) ->
+				return folder if name == "."
 				foundChild = null
 				for child in folder.get("children").models
 					if child.get("name") == name
@@ -144,14 +145,26 @@ define [
 					# it's not the root folder so keep going
 					path = entity.get("name") + "/" + path
 			return path
+
+		getRootFolderPath: () ->
+			rootFilePath = @getPathOfEntityId(@project.get("rootDoc_id"))
+			return rootFilePath.split("/").slice(0, -1).join("/")
+
+		getNameOfEntityId: (entity_id) ->
+			entity = @getEntity(entity_id)
+			return if !entity?
+			return entity.get("name")
 			
 		# RENAMING
 		renameSelected: () ->
 			entity_id = @getSelectedEntityId()
 			return if !entity_id?
 			@views[entity_id]?.startRename()
+			ga('send', 'event', 'editor-interaction', 'renameEntity', "topMenu")
+
 
 		renameEntity: (entity, name) ->
+			name = name?.trim()
 			@ide.socket.emit 'renameEntity', entity.id, entity.get("type"), name
 			entity.set("name", name)
 
@@ -190,7 +203,7 @@ define [
 			el = $($("#newEntityModalTemplate").html())
 			input = el.find("input")
 			create = _.once () =>
-				name = input.val()
+				name = input.val()?.trim()
 				if name != ""
 					callback(name)
 			modal = new Modal
@@ -213,52 +226,54 @@ define [
 				# value is "name.tex"
 				input[0].setSelectionRange(0, defaultName.indexOf("|"))
 
-		showNewDocModal: () ->
+		showNewDocModal: (parentFolder = @getCurrentFolder()) ->
+			return if !parentFolder?
 			@showNewEntityModal "Document", "name|.tex", (name) =>
-				@addDocToCurrentFolder name
+				@addDocToFolder parentFolder, name
 				
-		showNewFolderModal: () ->
+		showNewFolderModal:  (parentFolder = @getCurrentFolder()) ->
+			return if !parentFolder?
 			@showNewEntityModal "Folder", "name|", (name) =>
-				@addFolderToCurrentFolder name
+				@addFolderToFolder parentFolder, name
 
-		showUploadFileModal: () ->
-			folder = @getCurrentFolder()
-			return if !folder?
-			@ide.fileUploadManager.showUploadDialog folder.id
+		showUploadFileModal: (parentFolder = @getCurrentFolder()) ->
+			return if !parentFolder?
+			@ide.fileUploadManager.showUploadDialog parentFolder.id
 
 		addDoc: (folder_id, name) ->
 			@ide.socket.emit 'addDoc', folder_id, name
 
-		addDocToCurrentFolder: (name) ->
-			folder = @getCurrentFolder()
-			return if !folder?
-			@addDoc folder.id, name
+		addDocToFolder: (parentFolder, name) ->
+			@addDoc parentFolder.id, name
 
 		addFolder: (parent_folder_id, name) ->
 			@ide.socket.emit 'addFolder', parent_folder_id, name
 
-		addFolderToCurrentFolder: (name) ->
-			parentFolder = @getCurrentFolder()
+		addFolderToFolder: (parentFolder, name) ->
 			return if !parentFolder?
 			@addFolder parentFolder.id, name
 
 		# DELETING
-		confirmDelete: () ->
+		confirmDelete: (entity) ->
+			ga('send', 'event', 'editor-interaction', 'deleteEntity', "topMenu")
 			Modal.createModal
 				title: "Confirm Deletion"
-				message: "Are you sure you want to delete the selected files?"
+				message: "Are you sure you want to delete <strong>#{entity.get("name")}</strong>?"
 				buttons: [{
 					text: "Cancel"
 					class: "btn"
 				},{
 					text: "Delete"
 					class: "btn btn-danger"
-					callback: () => @_doDelete()
+					callback: () => @_doDelete(entity)
 				}]
 
-		_doDelete: () ->
+		confirmDeleteOfSelectedEntity: () ->
 			entity = @getSelectedEntity()
 			return if !entity?
+			@confirmDelete(entity)
+
+		_doDelete: (entity) ->
 			@ide.socket.emit 'deleteEntity', entity.id, entity.get("type")
 			@onDeleteEntity entity.id
 
@@ -269,6 +284,5 @@ define [
 			entity.collection?.remove(entity)
 			delete @views[entity_id]
 			
-				
-
-
+		setLabels: (labels) ->
+			@view.setLabels(labels)

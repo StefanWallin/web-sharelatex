@@ -7,10 +7,13 @@ require [
 
 		tableRowTemplate = '''
 			<tr>
+				<td> <input type="checkbox" class="select-one"></td>
 				<td> {{ email }} </td>
 				<td> {{ first_name }} {{ last_name }} </td>
 				<td> {{ !holdingAccount }} </td>
-				<td><button id="{{_id}}"" class="btn btn-danger">Remove</button></td>
+				<td>
+					<input type="hidden" name="user_id" value="{{_id}}" class="user_id">
+				</td>
 			</tr>
 		'''
 
@@ -36,7 +39,7 @@ require [
 					type: 'POST'
 					data:
 						email: email
-						_csrf: $("input[name=_csrf]").val()
+						_csrf: csrfToken
 					success: (data)->
 						if data.limitReached
 							alert("You have reached your maximum number of members")
@@ -54,16 +57,20 @@ require [
 				sendNewUserToServer(email)
 			$form.find("input").val('')
 
-		removeUser = (e)->
-			button = $(e.target)
-			user_id = button.attr("id")
-			$.ajax
-				url: "/subscription/group/user/#{user_id}"
-				type: 'DELETE'
-				data:
-					_csrf: csrfToken
-				success: ->
-					button.parents("tr").fadeOut(250)
+		removeUsers = (e)->
+			selectedUserRows = $('td input.select-one:checked').closest('tr').find(".user_id").toArray()
+			do deleteNext = () ->
+				row = selectedUserRows.pop()
+				if row?
+					user_id = $(row).val()
+					$.ajax
+						url: "/subscription/group/user/#{user_id}"
+						type: 'DELETE'
+						data:
+							_csrf: csrfToken
+						success: ->
+							$(row).parents("tr").fadeOut(250)
+							deleteNext()
 
 		$form.on 'keypress', (e)->
 			if(e.keyCode == 13)
@@ -71,4 +78,11 @@ require [
 
 		$form.find(".addUser").on 'click', addUser
 
-		$('table').on 'click', '.btn-danger', removeUser
+		$('#deleteUsers').on 'click', removeUsers
+
+		$('input.select-all').on "change", () ->
+			if $(@).is(":checked")
+				$("input.select-one").prop( "checked", true )
+			else
+				$("input.select-one").prop( "checked", false )
+

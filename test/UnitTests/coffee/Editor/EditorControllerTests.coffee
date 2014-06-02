@@ -30,19 +30,15 @@ describe "EditorController", ->
 		@ProjectOptionsHandler =
 			setCompiler : sinon.spy()
 			setSpellCheckLanguage: sinon.spy()
-		@ProjectEntityHandler = {}
+		@ProjectEntityHandler = 
+			flushProjectToThirdPartyDataStore:sinon.stub()
 		@ProjectEditorHandler =
 			buildProjectModelView : sinon.stub().returns(@projectModelView)
-		@ProjectHandler = class ProjectHandler
 		@Project =
 			findPopulatedById: sinon.stub().callsArgWith(1, null, @project)
 		@LimitationsManager = {}
 		@AuthorizationManager = {}
-		@AutomaticSnapshotManager = {}
-		@VersioningApiHandler =
-			enableVersioning : sinon.stub().callsArg(1)
 		@client = new MockClient()
-		@AnalyticsManager = {}
 
 		@settings = 
 			apis:{thirdPartyDataStore:{emptyProjectFlushDelayMiliseconds:0.5}}
@@ -52,26 +48,31 @@ describe "EditorController", ->
 		@TpdsPollingBackgroundTasks = {}
 		@ProjectDetailsHandler = 
 			setProjectDescription:sinon.stub()
+		@CollaboratorsHandler = 
+			removeUserFromProject: sinon.stub().callsArgWith(2)
+			addUserToProject: sinon.stub().callsArgWith(3)
+		@ProjectDeleter =
+			deleteProject: sinon.stub()
+
 		@EditorController = SandboxedModule.require modulePath, requires:
 			"../../infrastructure/Server" : io : @io
 			'../Project/ProjectEditorHandler' : @ProjectEditorHandler
 			'../Project/ProjectEntityHandler' : @ProjectEntityHandler
 			'../Project/ProjectOptionsHandler' : @ProjectOptionsHandler
 			'../Project/ProjectDetailsHandler': @ProjectDetailsHandler
+			'../Project/ProjectDeleter' : @ProjectDeleter
 			'../Project/ProjectGetter' : @ProjectGetter = {}
+			'../Collaborators/CollaboratorsHandler': @CollaboratorsHandler
 			'../DocumentUpdater/DocumentUpdaterHandler' : @DocumentUpdaterHandler
 			'../Subscription/LimitationsManager' : @LimitationsManager
 			'../Security/AuthorizationManager' : @AuthorizationManager
-			'../../handlers/ProjectHandler' : @ProjectHandler
-			"../Versioning/AutomaticSnapshotManager" : @AutomaticSnapshotManager
-			"../Versioning/VersioningApiHandler" : @VersioningApiHandler
-			"../Analytics/AnalyticsManager" : @AnalyticsManager
 			'../../models/Project' : Project: @Project
 			"settings-sharelatex":@settings
 			'../Dropbox/DropboxProjectLinker':@dropboxProjectLinker
 			'../ThirdPartyDataStore/TpdsPollingBackgroundTasks':@TpdsPollingBackgroundTasks
 			'./EditorRealTimeController':@EditorRealTimeController = {}
 			"../../infrastructure/Metrics": @Metrics = { inc: sinon.stub() }
+			"../TrackChanges/TrackChangesManager": @TrackChangesManager = {}
 			'redis':createClient:-> auth:->
 			"logger-sharelatex": @logger =
 				log: sinon.stub()
@@ -84,7 +85,6 @@ describe "EditorController", ->
 			@ProjectGetter.getProjectWithoutDocLines = sinon.stub().callsArgWith(1, null, @project)
 			@ProjectGetter.populateProjectWithUsers = sinon.stub().callsArgWith(1, null, @project)
 			@AuthorizationManager.setPrivilegeLevelOnClient = sinon.stub()
-			@AnalyticsManager.trackOpenEditor = sinon.stub()
 
 		describe "when authorized", ->
 			beforeEach ->
@@ -115,13 +115,6 @@ describe "EditorController", ->
 
 			it "should return the project model view, privilege level and protocol version", ->
 				@callback.calledWith(null, @projectModelView, "owner", @EditorController.protocolVersion).should.equal true
-
-			it "should enable versioning", ->
-				@VersioningApiHandler.enableVersioning.calledWith(@project)
-					.should.equal true
-
-			it "should track the event", ->
-				@AnalyticsManager.trackOpenEditor.calledWith(@user, @project).should.equal true
 
 		describe "when not authorized", ->
 			beforeEach ->
@@ -225,20 +218,24 @@ describe "EditorController", ->
 				.should.equal true
 
 	describe "flushProjectIfEmpty", ->
+		beforeEach ->	
+			@DocumentUpdaterHandler.flushProjectToMongoAndDelete = sinon.stub()
+			@TrackChangesManager.flushProject = sinon.stub()
+
 		describe "when a project has no more users", ->
 			it "should do the flush after the config set timeout to ensure that a reconect didn't just happen", (done)->
 				@rooms[@project_id] = []
-				@DocumentUpdaterHandler.flushProjectToMongoAndDelete = sinon.stub()
 				@EditorController.flushProjectIfEmpty @project_id, =>
 					@DocumentUpdaterHandler.flushProjectToMongoAndDelete.calledWith(@project_id).should.equal(true)
+					@TrackChangesManager.flushProject.calledWith(@project_id).should.equal true
 					done()
 
 		describe "when a project still has connected users", ->
 			it "should not flush the project", (done)->
 				@rooms[@project_id] = ["socket-id-1", "socket-id-2"]
-				@DocumentUpdaterHandler.flushProjectToMongoAndDelete = sinon.stub()
 				@EditorController.flushProjectIfEmpty @project_id, =>
 					@DocumentUpdaterHandler.flushProjectToMongoAndDelete.calledWith(@project_id).should.equal(false)
+					@TrackChangesManager.flushProject.calledWith(@project_id).should.equal false
 					done()
 
 	describe "updateClientPosition", ->
@@ -294,25 +291,29 @@ describe "EditorController", ->
 			@email = "Jane.Doe@example.com"
 			@priveleges = "readOnly"
 			@addedUser = { _id: "added-user" }
-			@ProjectHandler::addUserToProject = sinon.stub().callsArgWith(3, @addedUser)
+			@CollaboratorsHandler.addUserToProject = sinon.stub().callsArgWith(3, null, @addedUser)
 			@EditorRealTimeController.emitToRoom = sinon.stub()
 			@callback = sinon.stub()
 
 		describe "when the project can accept more collaborators", ->
 			beforeEach ->
 				@LimitationsManager.isCollaboratorLimitReached = sinon.stub().callsArgWith(1, null, false)
-				@EditorController.addUserToProject(@project_id, @email, @priveleges, @callback)
 
-			it "should add the user to the project", ->
-				@ProjectHandler::addUserToProject
-					.calledWith(@project_id, @email.toLowerCase(), @priveleges)
-					.should.equal true
+			it "should add the user to the project", (done)->
+				@EditorController.addUserToProject @project_id, @email, @priveleges, =>
+					@CollaboratorsHandler.addUserToProject.calledWith(@project_id, @email.toLowerCase(), @priveleges).should.equal true
+					done()
 
-			it "should emit a userAddedToProject event", ->
-				@EditorRealTimeController.emitToRoom.calledWith(@project_id, "userAddedToProject", @addedUser).should.equal true
+			it "should emit a userAddedToProject event", (done)->
+				@EditorController.addUserToProject @project_id, @email, @priveleges, =>
+					@EditorRealTimeController.emitToRoom.calledWith(@project_id, "userAddedToProject", @addedUser).should.equal true
+					done()
 
-			it "should return true to the callback", ->
-				@callback.calledWith(null, true).should.equal true
+			it "should return true to the callback", (done)->
+				@EditorController.addUserToProject @project_id, @email, @priveleges, (err, result)=>
+					result.should.equal true
+					done()
+
 
 		describe "when the project cannot accept more collaborators", ->
 			beforeEach ->
@@ -320,7 +321,7 @@ describe "EditorController", ->
 				@EditorController.addUserToProject(@project_id, @email, @priveleges, @callback)
 
 			it "should not add the user to the project", ->
-				@ProjectHandler::addUserToProject.called.should.equal false
+				@CollaboratorsHandler.addUserToProject.called.should.equal false
 
 			it "should not emit a userAddedToProject event", ->
 				@EditorRealTimeController.emitToRoom.called.should.equal false
@@ -332,13 +333,13 @@ describe "EditorController", ->
 	describe "removeUserFromProject", ->
 		beforeEach ->
 			@removed_user_id = "removed-user-id"
-			@ProjectHandler::removeUserFromProject = sinon.stub().callsArgWith(2)
+			@CollaboratorsHandler.removeUserFromProject = sinon.stub().callsArgWith(2)
 			@EditorRealTimeController.emitToRoom = sinon.stub()
 
 			@EditorController.removeUserFromProject(@project_id, @removed_user_id)
 
 		it "remove the user from the project", ->
-			@ProjectHandler::removeUserFromProject
+			@CollaboratorsHandler.removeUserFromProject
 				.calledWith(@project_id, @removed_user_id)
 				.should.equal true
 
@@ -366,7 +367,7 @@ describe "EditorController", ->
 	describe 'set document', ->
 		beforeEach ->
 			@docLines = ["foo", "bar"]
-			@ProjectEntityHandler.updateDocLines = sinon.stub().callsArg(4)
+			@DocumentUpdaterHandler.flushDocToMongo = sinon.stub().callsArg(2)
 			@DocumentUpdaterHandler.setDocument = sinon.stub().callsArg(3)
 			@EditorRealTimeController.emitToRoom = sinon.stub()
 
@@ -388,12 +389,9 @@ describe "EditorController", ->
 				mock.verify()
 				done()
 
-		it 'should update the document lines', (done)->
-			@ProjectEntityHandler.updateDocLines = ->
-			mock = sinon.mock(@ProjectEntityHandler).expects("updateDocLines").withArgs(@project_id, @doc_id, @docLines).once().callsArg(4)
-
-			@EditorController.setDoc @project_id, @doc_id, @docLines, (err)->
-				mock.verify()
+		it 'should flush the doc to mongo', (done)->
+			@EditorController.setDoc @project_id, @doc_id, @docLines, (err)=>
+				@DocumentUpdaterHandler.flushDocToMongo.calledWith(@project_id, @doc_id).should.equal true
 				done()
 
 
@@ -610,3 +608,114 @@ describe "EditorController", ->
 				done()
 
 
+	describe "deleteProject", ->
+
+		beforeEach ->
+			@err = "errro"
+			@ProjectDeleter.deleteProject = sinon.stub().callsArgWith(1, @err)
+
+		it "should call the project handler", (done)->
+			@EditorController.deleteProject @project_id, (err)=>
+				err.should.equal @err
+				@ProjectDeleter.deleteProject.calledWith(@project_id).should.equal true
+				done()
+
+
+	describe "renameEntity", ->
+
+		beforeEach ->
+			@err = "errro"
+			@entity_id = "entity_id_here"
+			@entityType = "doc"
+			@newName = "bobsfile.tex"
+			@ProjectEntityHandler.renameEntity = sinon.stub().callsArgWith(4, @err)
+			@EditorRealTimeController.emitToRoom = sinon.stub()
+
+		it "should call the project handler", (done)->
+			@EditorController.renameEntity @project_id, @entity_id, @entityType, @newName, =>
+				@ProjectEntityHandler.renameEntity.calledWith(@project_id, @entity_id, @entityType, @newName).should.equal true
+				done()
+
+
+		it "should emit the update to the room", (done)->
+			@EditorController.renameEntity @project_id, @entity_id, @entityType, @newName, =>
+				@EditorRealTimeController.emitToRoom.calledWith(@project_id, 'reciveEntityRename', @entity_id, @newName).should.equal true				
+				done()
+
+	describe "moveEntity", ->
+
+		beforeEach ->
+			@err = "errro"
+			@entity_id = "entity_id_here"
+			@entityType = "doc"
+			@folder_id = "313dasd21dasdsa"
+			@ProjectEntityHandler.moveEntity = sinon.stub().callsArgWith(4, @err)
+			@EditorRealTimeController.emitToRoom = sinon.stub()
+
+		it "should call the ProjectEntityHandler", (done)->
+			@EditorController.moveEntity @project_id, @entity_id, @folder_id, @entityType, =>
+				@ProjectEntityHandler.moveEntity.calledWith(@project_id, @entity_id, @folder_id, @entityType).should.equal true
+				done()
+
+
+		it "should emit the update to the room", (done)->
+			@EditorController.moveEntity @project_id, @entity_id, @folder_id, @entityType, =>
+				@EditorRealTimeController.emitToRoom.calledWith(@project_id, 'reciveEntityMove', @entity_id, @folder_id).should.equal true				
+				done()
+
+	describe "renameProject", ->
+
+		beforeEach ->
+			@err = "errro"
+			@window_id = "kdsjklj290jlk"
+			@newName = "new name here"
+			@ProjectDetailsHandler.renameProject = sinon.stub().callsArgWith(2, @err)
+			@EditorRealTimeController.emitToRoom = sinon.stub()
+
+		it "should call the EditorController", (done)->
+			@EditorController.renameProject @project_id, @newName, =>
+				@ProjectDetailsHandler.renameProject.calledWith(@project_id, @newName).should.equal true
+				done()
+
+
+		it "should emit the update to the room", (done)->
+			@EditorController.renameProject @project_id, @newName, =>
+				@EditorRealTimeController.emitToRoom.calledWith(@project_id, 'projectNameUpdated', @newName).should.equal true				
+				done()
+
+
+	describe "setPublicAccessLevel", ->
+
+		beforeEach ->
+			@err = "errro"
+			@newAccessLevel = "public"
+			@ProjectDetailsHandler.setPublicAccessLevel = sinon.stub().callsArgWith(2, @err)
+			@EditorRealTimeController.emitToRoom = sinon.stub()
+
+		it "should call the EditorController", (done)->
+			@EditorController.setPublicAccessLevel @project_id, @newAccessLevel, =>
+				@ProjectDetailsHandler.setPublicAccessLevel.calledWith(@project_id, @newAccessLevel).should.equal true
+				done()
+
+		it "should emit the update to the room", (done)->
+			@EditorController.setPublicAccessLevel @project_id, @newAccessLevel, =>
+				@EditorRealTimeController.emitToRoom.calledWith(@project_id, 'publicAccessLevelUpdated', @newAccessLevel).should.equal true				
+				done()
+
+	describe "setRootDoc", ->
+
+		beforeEach ->
+			@err = "errro"
+			@newRootDocID = "21312321321"
+			@ProjectEntityHandler.setRootDoc = sinon.stub().callsArgWith(2, @err)
+			@EditorRealTimeController.emitToRoom = sinon.stub()
+
+		it "should call the ProjectEntityHandler", (done)->
+			@EditorController.setRootDoc @project_id, @newRootDocID, =>
+				@ProjectEntityHandler.setRootDoc.calledWith(@project_id, @newRootDocID).should.equal true
+				done()
+
+		it "should emit the update to the room", (done)->
+			@EditorController.setRootDoc @project_id, @newRootDocID, =>
+				@EditorRealTimeController.emitToRoom.calledWith(@project_id, 'rootDocUpdated', @newRootDocID).should.equal true				
+				done()

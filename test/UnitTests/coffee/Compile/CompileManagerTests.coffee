@@ -10,11 +10,8 @@ describe "CompileManager", ->
 	beforeEach ->
 		@rateLimitGetStub = sinon.stub()
 		rateLimitGetStub = @rateLimitGetStub
-		@ratelimiter = class RateLimiter
-			constructor: ->
-				return {
-					get: rateLimitGetStub
-				}
+		@ratelimiter = 
+			addCount: sinon.stub()
 		@CompileManager = SandboxedModule.require modulePath, requires:
 			"settings-sharelatex": @settings =
 				redis: web: {host: "localhost", port: 42}
@@ -24,8 +21,7 @@ describe "CompileManager", ->
 			"../Project/ProjectRootDocManager": @ProjectRootDocManager = {}
 			"../../models/Project": Project: @Project = {}
 			"./ClsiManager": @ClsiManager = {}
-			"../../managers/LatexManager": @LatexManager = {}
-			"ratelimiter":@ratelimiter
+			"../../infrastructure/RateLimiter": @ratelimiter
 			"../../infrastructure/Metrics": @Metrics =
 				Timer: class Timer
 					done: sinon.stub()
@@ -41,7 +37,6 @@ describe "CompileManager", ->
 			@CompileManager._ensureRootDocumentIsSet = sinon.stub().callsArgWith(1, null)
 			@DocumentUpdaterHandler.flushProjectToMongo = sinon.stub().callsArgWith(1, null)
 			@ClsiManager.sendRequest = sinon.stub().callsArgWith(1, null, @status = "mock-status")
-			@LatexManager.compile = sinon.stub().callsArgWith(1, null, @status = "mock-status")
 
 		describe "succesfully", ->
 			beforeEach ->
@@ -52,7 +47,6 @@ describe "CompileManager", ->
 				@CompileManager._checkIfRecentlyCompiled
 					.calledWith(@project_id, @user_id)
 					.should.equal true
-
 
 			it "should flush the project to the database", ->
 				@DocumentUpdaterHandler.flushProjectToMongo
@@ -96,13 +90,8 @@ describe "CompileManager", ->
 		describe "should check the rate limit", ->
 			it "should return", (done)->
 				@CompileManager._checkIfAutoCompileLimitHasBeenHit = sinon.stub().callsArgWith(1, null, false)
-				@CompileManager.compile @project_id, @user_id, {}, (err)->
-					done()
-
-			it "should not error if the autocompile limit has not been hit", (done)->
-				@CompileManager._checkIfAutoCompileLimitHasBeenHit = sinon.stub().callsArgWith(1, null, true)
-				@CompileManager.compile @project_id, @user_id, {}, (err)->
-					assert.equal null, err
+				@CompileManager.compile @project_id, @user_id, {}, (err, status)->
+					status.should.equal "autocompile-backoff"
 					done()
 
 	describe "getLogLines", ->
@@ -203,29 +192,30 @@ describe "CompileManager", ->
 	describe "_checkIfAutoCompileLimitHasBeenHit", ->
 
 		it "should be able to compile if it is not an autocompile", (done)->
-			limit = {remaining:-1}
-			@rateLimitGetStub.callsArgWith(0, null, limit)
+			@ratelimiter.addCount.callsArgWith(1, null, true)
 			@CompileManager._checkIfAutoCompileLimitHasBeenHit false, (err, canCompile)=>
 				canCompile.should.equal true
 				done()
 
 		it "should be able to compile if rate limit has remianing", (done)->
-			limit = {remaining:3}
-			@rateLimitGetStub.callsArgWith(0, null, limit)
+			@ratelimiter.addCount.callsArgWith(1, null, true)
 			@CompileManager._checkIfAutoCompileLimitHasBeenHit true, (err, canCompile)=>
+				args = @ratelimiter.addCount.args[0][0]
+				args.throttle.should.equal 10
+				args.subjectName.should.equal "everyone"
+				args.timeInterval.should.equal 15
+				args.endpointName.should.equal "auto_compile"
 				canCompile.should.equal true
 				done()
 
 		it "should be not able to compile if rate limit has no remianing", (done)->
-			limit = {remaining:0}
-			@rateLimitGetStub.callsArgWith(0, null, limit)
+			@ratelimiter.addCount.callsArgWith(1, null, false)
 			@CompileManager._checkIfAutoCompileLimitHasBeenHit true, (err, canCompile)=>
 				canCompile.should.equal false
 				done()
 
 		it "should return false if there is an error in the rate limit", (done)->
-			limit = {remaining:4}
-			@rateLimitGetStub.callsArgWith(0, "Err", limit)
+			@ratelimiter.addCount.callsArgWith(1, "error")
 			@CompileManager._checkIfAutoCompileLimitHasBeenHit true, (err, canCompile)=>
 				canCompile.should.equal false
 				done()

@@ -1,16 +1,17 @@
 require [
 	"tags"
+	"moment"
+	"event_tracking"
 	"gui"
-	"libs/moment"
 	"libs/underscore"
 	"libs/fineuploader"
 	"libs/jquery.storage"
-], (tagsManager)->
+], (tagsManager, moment)->
 
 	$('.isoDate').each (i, d)->
 		html = $(d)
-		unparsedDate = html.text()
-		formatedDate = moment(unparsedDate).format('LLL')
+		unparsedDate = html.text().trim()
+		formatedDate = moment(unparsedDate).format("Do MMM YYYY, h:mm:ss a")
 		html.text(formatedDate)
 
 	refreshProjectFilter = ->
@@ -57,7 +58,7 @@ require [
 		name = $(@).data("name")
 		id = $(@).data("id")
 
-		nameEl = $modal.find(".name").text(name)
+		$modal.find(".name").text(name)
 
 		href = this.href
 		self = @
@@ -77,6 +78,40 @@ require [
 			$confirm.off 'click'
 		$modal.find('.cancel').click (e)->
 			$modal.modal('hide')
+
+	$('.renameProject').click (event)->
+		event.preventDefault()
+		$modal = $('#renameProjectModal')
+		$confirm = $modal.find('#confirmRename')
+		$modal.modal({backdrop:true, show:true, keyboard:true})
+		name = $(@).data("name")
+		nameEl = $modal.find("#projectNewName").val(name)
+		nameEl.select()
+		href = this.href
+		self = @
+		window.r = @
+		$confirm.on 'click', (e) =>
+			newProjectName = nameEl.val()
+			$.ajax
+				url: href
+				type:'POST'
+				data:
+					_csrf: $(@).data("csrf")
+					newProjectName:newProjectName
+				success: (data)->
+					$modal.modal('hide')
+					if data.message
+						new Message data
+					else
+						$(self.parentNode.parentNode.parentNode.parentNode).find(".projectName").text(newProjectName)
+						$(self.parentNode.parentNode).find("li a").each ()->
+							$(this).data('name', newProjectName)
+
+		$modal.on 'hide', ->
+			$confirm.off 'click'
+		$modal.find('.cancel').click (e)->
+			$modal.modal('hide')
+
 
 	$(".leaveProject").click (event) ->
 		event.preventDefault()
@@ -143,7 +178,7 @@ require [
 		$confirm.click (e) =>
 			$confirm.attr("disabled", true)
 			$confirm.text("Creating...")
-			projectName = $modal.find('input').val()
+			projectName = $modal.find('input').val()?.trim()
 			$.ajax
 				url: '/project/new'
 				type:'POST'

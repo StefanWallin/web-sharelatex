@@ -10,6 +10,17 @@
 			button.btn.btn-danger.confirm Delete Forever
 			button.btn.cancel No
 
+#renameProjectModal(style='display: none')
+	.modal
+		.modal-header
+			h3 Rename Project
+		.modal-body
+			form.form-horizontal(onkeydown="if (event.keyCode == 13){event.preventDefault(); document.getElementById('confirmRename').click()}")
+				input.inputmodal#projectNewName(placeholder='name')
+		.modal-footer
+			button.btn.btn-primary#confirmRename Rename
+			button.btn.cancel Cancel
+
 #leaveProjectModal(style='display: none')
 	.modal
 		.modal-header
@@ -76,15 +87,6 @@
 			h3
 		.modal-body
 			span.message
-
-#genericServerErrorModal(style='display: none')
-	.modal
-		.modal-header
-			h3 There was a problem talking to the server
-		.modal-body
-			span.message Sorry, we couldn't complete your request right now. Please wait a few moments and try again. If the problem persists, please let us know.
-		.modal-footer
-			button.btn.btn-primary.cancel Ok
 
 #projectUploadModal(style='display: none')
 	.modal

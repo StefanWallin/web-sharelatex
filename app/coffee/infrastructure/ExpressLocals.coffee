@@ -21,13 +21,19 @@ for path in [
     "#{jsPath}list.js",
     "#{jsPath}libs/pdf.js",
     "#{jsPath}libs/pdf.worker.js",
-    "/stylesheets/mainStyle.css"
+    "/stylesheets/mainStyle.css",
+    "/brand/plans.css"
 ]
 	filePath = Path.join __dirname, "../../../", "public#{path}"
-	content = fs.readFileSync filePath
-	hash = crypto.createHash("md5").update(content).digest("hex")
-	logger.log "#{filePath}: #{hash}"
-	fingerprints[path] = hash
+	exists = fs.existsSync filePath
+	if exists
+		content = fs.readFileSync filePath
+		hash = crypto.createHash("md5").update(content).digest("hex")
+		logger.log "#{filePath}: #{hash}"
+		fingerprints[path] = hash
+	else
+		logger.log filePath:filePath, "file does not exist for fingerprints"
+	
 
 module.exports = (app)->
 	app.use (req, res, next)->
@@ -47,10 +53,10 @@ module.exports = (app)->
 			Settings.siteUrl.substring(Settings.siteUrl.indexOf("//")+2)
 		next()
 
-	app.use (req, res, next)-> 
-		res.locals.formatPrivlageLevel = (privlageLevel)->
-			formatedPrivlages = private:"Private", readOnly:"Read Only", readAndWrite:"Read and Write"
-			return formatedPrivlages[privlageLevel] || "Private"
+	app.use (req, res, next)->
+		res.locals.formatProjectPublicAccessLevel = (privilegeLevel)->
+			formatedPrivileges = private:"Private", readOnly:"Public: Read Only", readAndWrite:"Public: Read and Write"
+			return formatedPrivileges[privilegeLevel] || "Private"
 		next()
 
 	app.use (req, res, next)-> 
@@ -95,7 +101,6 @@ module.exports = (app)->
 
 	app.use (req, res, next)->
 		if req.session.user?
-			res.locals.mixpanelId = req.session.user._id
 			res.locals.user =
 				email: req.session.user.email
 				first_name: req.session.user.first_name
@@ -106,9 +111,7 @@ module.exports = (app)->
 			if req.session.justLoggedIn
 				res.locals.justLoggedIn = true
 				delete req.session.justLoggedIn
-		res.locals.mixpanelToken = Settings.analytics?.mixpanel?.token
 		res.locals.gaToken       = Settings.analytics?.ga?.token
-		res.locals.heapToken     = Settings.analytics?.heap?.token
 		res.locals.tenderUrl     = Settings.tenderUrl
 		next()
 

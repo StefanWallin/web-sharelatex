@@ -47,7 +47,7 @@ mixin plan(plan, cssClass, monthly)
 					- href = "/register"
 				-else if(userNotLoggedIn)
 					- href = "/register?redir="+href
-				a.btn.btn-success(href='#{href}').sign_up_now	
+				a.btn.btn-success(href='#{href}', ga_PlanType=plan.planCode).sign_up_now	
 					| Sign Up Now!
 
 
@@ -90,9 +90,9 @@ block content
 								.span4
 									mixin plan(plans.personalAccount, "", true)
 								.span4
-									mixin plan(plans.individualMonthlyPlans[0], "big", true)
+									mixin plan(plans.allPlans['collaborator'], "big", true)
 								.span4
-									mixin plan(plans.individualMonthlyPlans[1], "", true)
+									mixin plan(plans.allPlans['professional'], "", true)
 
 						.tab-pane.annual-pricing
 							.row
@@ -101,9 +101,9 @@ block content
 								.span4
 									mixin plan(plans.personalAccount, "", true)
 								.span4
-									mixin plan(plans.individualAnnualPlans[0], "big", false)
+									mixin plan(plans.allPlans['collaborator-annual'], "big", false)
 								.span4
-									mixin plan(plans.individualAnnualPlans[1], "", false)
+									mixin plan(plans.allPlans['professional-annual'], "", false)
 
 						.tab-pane.student-pricing
 							.row
@@ -112,9 +112,9 @@ block content
 								.span4
 									mixin plan(plans.personalAccount, "", true)
 								.span4
-									mixin plan(plans.studentAccounts[0], "big", true)
+									mixin plan(plans.allPlans['student'], "big", true)
 								.span4
-									mixin plan(plans.studentAccounts[1], "", false)
+									mixin plan(plans.allPlans['student-annual'], "", false)
 
 				.row
 					.span12.ab-guarantee-shown(style="text-align: center;")
@@ -150,8 +150,17 @@ block content
 									mixin plan(plans.groupAnnualPlans[2], "", false)
 						.tab-pane.student-pricing
 
-			include ../general/small-footer
-			link(rel='stylesheet', href='/brand/plans.css?fingerprint='+fingerprint('/brand/mainStyle.css'))	
 
-			script
-				mixpanel.track("Page Viewed", { name: "plans" })
+				.row
+					.span6.offset3
+						.alert.alert-info(style="color: #333")
+							h3 Want to use ShareLaTeX for free?
+							p Tell your university or department about our 
+								a(href="/university") site licenses 
+								| and use of all our
+								| features for free as a student or member of staff.
+								
+		include ../general/small-footer
+		link(rel='stylesheet', href='/brand/plans.css?fingerprint='+fingerprint('/brand/plans.css'))	
+
+

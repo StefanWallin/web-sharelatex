@@ -22,6 +22,7 @@ describe 'TpdsUpdateSender', ->
 		@requestQueuer = regist:(queue, meth, opts, callback)->
 		project = {owner_ref:user_id,readOnly_refs:[read_only_ref_1], collaberator_refs:[collaberator_ref_1]}
 		@Project = findById:sinon.stub().callsArgWith(2, null, project)
+		@docstoreUrl = "docstore.sharelatex.env"
 		@updateSender = SandboxedModule.require modulePath, requires:
 			'fairy':{connect:=>{queue:=>@requestQueuer}}
 			"settings-sharelatex": 
@@ -31,6 +32,8 @@ describe 'TpdsUpdateSender', ->
 					thirdPartyDataStore: {url: thirdPartyDataStoreApiUrl}
 					filestore:
 						url: filestoreUrl
+					docstore:
+						pubUrl: @docstoreUrl
 				redis:fairy:{}
 			"logger-sharelatex":{log:->}
 			'../../models/Project': Project:@Project
@@ -51,17 +54,17 @@ describe 'TpdsUpdateSender', ->
 				done()
 			@updateSender.addFile {project_id:project_id, file_id:file_id, path:path, project_name:project_name}, ->
 
-		it 'post doc with path and lines', (done)->
+		it 'post doc with stream origin of docstore', (done)->
 			doc_id = "4545345"
 			path = "/some/path/here.tex"
 			lines = ["line1", "line2", "line3"]
 
-			@requestQueuer.enqueue = (uid, method, job, callback)->
+			@requestQueuer.enqueue = (uid, method, job, callback)=>
 				uid.should.equal project_id
 				job.method.should.equal "post"
 				expectedUrl = "#{thirdPartyDataStoreApiUrl}/user/#{user_id}/entity/#{encodeURIComponent(project_name)}#{encodeURIComponent(path)}"
 				job.uri.should.equal expectedUrl
-				assert.deepEqual job.docLines, lines
+				job.streamOrigin.should.equal "#{@docstoreUrl}/project/#{project_id}/doc/#{doc_id}/raw"
 				job.headers.sl_all_user_ids.should.eql(JSON.stringify([collaberator_ref_1, read_only_ref_1, user_id]))
 				done()
 			@updateSender.addDoc {project_id:project_id, doc_id:doc_id, path:path, docLines:lines,project_name:project_name}

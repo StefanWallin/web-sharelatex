@@ -9,13 +9,15 @@ a lot of logic around creating and editing projects, and account management.
 The rest of the ShareLaTeX stack, along with information about contributing can be found in the 
 [sharelatex/sharelatex](https://github.com/sharelatex/sharelatex) repository.
 
+Unit test status
+----------------
+
+[![Unit test status](https://travis-ci.org/sharelatex/web-sharelatex.png?branch=master)](https://travis-ci.org/sharelatex/web-sharelatex)
+
 License and Credits
 -------------------
 
-### Code
-
-All coffeescript files (files ended in *.coffee) are licensed under the
-[AGPLv3 license](http://www.gnu.org/licenses/agpl-3.0.html).
+This project is licensed under the [AGPLv3 license](http://www.gnu.org/licenses/agpl-3.0.html)
 
 ### Stylesheets
 

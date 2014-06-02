@@ -5,7 +5,7 @@ logger = require('logger-sharelatex')
 Settings = require('settings-sharelatex')
 slReqIdHelper = require('soa-req-id')
 FileTypeManager = require('../Uploads/FileTypeManager')
-GuidManager = require '../../managers/GuidManager'
+uuid = require('node-uuid')
 fs = require('fs')
 
 module.exports =
@@ -75,7 +75,7 @@ module.exports =
 
 		writeStreamToDisk: (project_id, file_id, stream, callback = (err, fsPath)->)->
 			if !file_id?
-				file_id = GuidManager.newGuid()
+				file_id = uuid.v4()
 			dumpPath = "#{Settings.path.dumpFolder}/#{project_id}_#{file_id}"
 
 			writeStream = fs.createWriteStream(dumpPath)
@@ -94,17 +94,12 @@ module.exports =
 				logger.log project_id:project_id, file_id:file_id, dumpPath:dumpPath, "tpds update write stream finished"
 				callback null, dumpPath
 				
-			if stream.emitBufferedData?
-				stream.emitBufferedData()
-			stream.resume()
-
-
 readFileIntoTextArray = (path, callback)->
 	fs.readFile path, "utf8", (error, content = "") ->
 		if error?
 			logger.err path:path, "error reading file into text array"
 			return callback(err)
-		lines = content.split("\n")
+		lines = content.split(/\r\n|\n|\r/)
 		callback error, lines
 
 

@@ -2,8 +2,8 @@ require [
 	"./slides"
 	"./forms"
 	"./gui"
-	"./ab_testing"
 	"./home"
+	"./event_tracking"
 ], ()->
 
 

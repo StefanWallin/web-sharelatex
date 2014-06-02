@@ -1,14 +1,17 @@
 chai = require('chai')
 assert = require('chai').assert
 should = chai.should()
+expect = chai.expect
 sinon = require 'sinon'
 modulePath = "../../../../app/js/Features/Project/ProjectEntityHandler"
 SandboxedModule = require('sandboxed-module')
 ObjectId = require("mongoose").Types.ObjectId
 tk = require 'timekeeper'
+Errors = require "../../../../app/js/errors"
 
-describe 'project entity handler', ->
+describe 'ProjectEntityHandler', ->
 	project_id = '4eecb1c1bffa66588e0000a1'
+	doc_id = '4eecb1c1bffa66588e0000a2'
 	folder_id = "4eecaffcbffa66588e000008"
 	rootFolderId = "4eecaffcbffa66588e000007"
 	
@@ -32,9 +35,11 @@ describe 'project entity handler', ->
 				@rev = 0
 			save:(callback)->callback()
 			rootFolder:[@rootFolder]
+
 		@DocModel = class Doc
 			constructor:(options)->
-				{@name, @lines} = options		
+				{@name, @lines} = options
+				@_id = doc_id
 				@rev = 0
 		@FileModel =  class File
 			constructor:(options)->
@@ -61,8 +66,10 @@ describe 'project entity handler', ->
 			'../ThirdPartyDataStore/TpdsUpdateSender':@tpdsUpdateSender
 			'./ProjectLocator':@projectLocator = {}
 			'../../Features/DocumentUpdater/DocumentUpdaterHandler':@documentUpdaterHandler = {}
-			'logger-sharelatex':{log:->}
+			'../Docstore/DocstoreManager': @DocstoreManager = {}
+			'logger-sharelatex': @logger = {log:sinon.stub(), error: sinon.stub()}
 			'./ProjectUpdateHandler': @projectUpdater
+			"./ProjectGetter": @ProjectGetter = {}
 
 
 	describe 'mkdirp', ->
@@ -179,21 +186,13 @@ describe 'project entity handler', ->
 
 		describe "a doc", ->
 			beforeEach (done) ->
-				@ProjectEntityHandler._cleanUpEntity @project, _id: @entity_id, 'doc', done
+				@ProjectEntityHandler._cleanUpDoc = sinon.stub().callsArg(3)
+				@ProjectEntityHandler._cleanUpEntity @project, @entity = {_id: @entity_id}, 'doc', done
 
-			it "should not attempted to delete from FileStoreHandler", ->
-				@FileStoreHandler.deleteFile.called.should.equal false
-
-			it "should delete the doc from the document updater", ->
-				@documentUpdaterHandler.deleteDoc.calledWith(project_id, @entity_id).should.equal true
-
-		describe "when the entity is the root document", ->
-			beforeEach (done) ->
-				@project.rootDoc_id = new ObjectId(@entity_id)
-				@ProjectEntityHandler._cleanUpEntity @project, _id: @entity_id, 'doc', done
-
-			it "should unset the root doc id", ->
-				@ProjectEntityHandler.unsetRootDoc.calledWith(project_id).should.equal true
+			it "should clean up the doc", ->
+				@ProjectEntityHandler._cleanUpDoc
+					.calledWith(@project, @entity)
+					.should.equal true
 
 		describe "a folder", ->
 			beforeEach (done) ->
@@ -283,42 +282,62 @@ describe 'project entity handler', ->
 						done()
 			@ProjectEntityHandler._removeElementFromMongoArray model, id, mongoPath, ->
 
-	describe 'adding doc', ->
-		docName = "some new doc"
-		docLines = ['1234','abc']
+	describe 'getDoc', ->
+		beforeEach ->
+			@lines = ["mock", "doc", "lines"]
+			@rev = 5
+			@DocstoreManager.getDoc = sinon.stub().callsArgWith(2, null, @lines, @rev)
+			@ProjectEntityHandler.getDoc project_id, doc_id, @callback
 
-		it 'should call put element', (done)->
-			@ProjectModel.putElement = (passedProject_id, passedFolder_id, passedDoc, passedType, callback)-> 
-				passedProject_id.should.equal project_id
-				passedFolder_id.should.equal folder_id
-				passedDoc.name.should.equal docName
-				passedDoc.lines[0].should.equal docLines[0]
-				passedDoc.lines[1].should.equal docLines[1]
-				passedType.should.equal 'doc'
-				done()
-			@ProjectEntityHandler.addDoc project_id, folder_id, docName, docLines, "", (err, doc, parentFolder)->
+		it "should call the docstore", ->
+			@DocstoreManager.getDoc
+				.calledWith(project_id, doc_id)
+				.should.equal true
 
-		it 'should return doc and parent folder', (done)->
-			@ProjectEntityHandler.addDoc project_id, folder_id, docName, docLines, "", (err, doc, parentFolder)->
-				parentFolder.should.equal folder_id
-				doc.name.should.equal docName
-				done()
+		it "should call the callback with the lines, version and rev", ->
+			@callback.calledWith(null, @lines, @rev).should.equal true
 
-		it 'should call third party data store', (done)->
-			fileSystemPath = "/somehwere/#{docName}"
-			@ProjectModel.putElement = (project_id, folder_id, doc, type, callback)-> callback(null, {path:{fileSystem:fileSystemPath}})
+	describe 'addDoc', ->
+		beforeEach ->
+			@name = "some new doc"
+			@lines = ['1234','abc']
+			@path = "/path/to/doc"
 
-			@tpdsUpdateSender.addDoc = (options)=>
-				options.project_id.should.equal project_id
-				options.docLines.should.equal docLines
-				options.path.should.equal fileSystemPath
-				options.project_name.should.equal @project.name
-				options.rev.should.equal 0
-				done()
+			@ProjectModel.putElement = sinon.stub().callsArgWith(4, null, {path:{fileSystem:@path}})
+			@callback = sinon.stub()
+			@tpdsUpdateSender.addDoc = sinon.stub().callsArg(2)
+			@DocstoreManager.updateDoc = sinon.stub().callsArgWith(3, null, true, 0)
 
-			@ProjectEntityHandler.addDoc project_id, folder_id, docName, docLines, "",->
+			@ProjectEntityHandler.addDoc project_id, folder_id, @name, @lines, @callback
 
-		
+			# Created doc
+			@doc = @ProjectModel.putElement.args[0][2]
+			@doc.name.should.equal @name
+			expect(@doc.lines).to.be.undefined
+
+		it 'should call put element', ->
+			@ProjectModel.putElement
+				.calledWith(project_id, folder_id, @doc)
+				.should.equal true
+
+		it 'should return doc and parent folder', ->
+			@callback.calledWith(null, @doc, folder_id).should.equal true
+
+		it 'should call third party data store', ->
+			@tpdsUpdateSender.addDoc
+				.calledWith({
+					project_id: project_id
+					doc_id: doc_id
+					path: @path
+					project_name: @project.name
+					rev: 0
+				})
+				.should.equal true
+
+		it "should send the doc lines to the doc store", ->
+			@DocstoreManager.updateDoc
+				.calledWith(project_id, @doc._id.toString(), @lines)
+				.should.equal true
 
 	describe 'adding file', ->
 		fileName = "something.jpg"
@@ -439,186 +458,266 @@ describe 'project entity handler', ->
 				done()
 
 
-	describe 'updating document lines', ->
-		docId = "123456"
-		docLines = ['1234','abc', '543543']
-		mongoPath = "folders[0].folders[5]"
-		fileSystemPath = "/somehwere/something.tex"
+	describe 'updateDocLines', ->
+		beforeEach ->
+			@lines = ['mock', 'doc', 'lines']
+			@path = "/somewhere/something.tex"
+			@doc = {
+				_id: doc_id
+			}
+			@ProjectGetter.getProjectWithoutDocLines = sinon.stub().callsArgWith(1, null, @project)
+			@projectLocator.findElement = sinon.stub().callsArgWith(1, null, @doc, {fileSystem: @path})
+			@tpdsUpdateSender.addDoc = sinon.stub().callsArg(1)
+			@projectUpdater.markAsUpdated = sinon.stub()
+			@callback = sinon.stub()
 
-		it 'should find project via getProject', (done)->
-			@ProjectModel.getProject = (passedProject_id, callback)->
-				passedProject_id.should.equal project_id
-				done()
+		describe "when the doc has been modified", ->
+			beforeEach ->
+				@DocstoreManager.updateDoc = sinon.stub().callsArgWith(3, null, true, @rev = 5)
+				@ProjectEntityHandler.updateDocLines project_id, doc_id, @lines, @callback
 
-			@ProjectEntityHandler.updateDocLines project_id, "", [], ->
+			it "should get the project without doc lines", ->
+				@ProjectGetter.getProjectWithoutDocLines
+					.calledWith(project_id)
+					.should.equal true
 
-		it 'should find the doc', (done)->
-			
-			@projectLocator.findElement = (options, callback)->
-				options.element_id.should.equal docId
-				options.type.should.equal 'docs'
-				done()
+			it "should find the doc", ->
+				@projectLocator.findElement
+					.calledWith({
+						project: @project
+						type: "docs"
+						element_id: doc_id
+					})
+					.should.equal true
 
-			@ProjectEntityHandler.updateDocLines project_id, docId, "", ->
+			it "should update the doc in the docstore", ->
+				@DocstoreManager.updateDoc
+					.calledWith(project_id, doc_id, @lines)
+					.should.equal true
 
-		it 'should build mongo update statment', (done)->
-			@projectLocator.findElement = (opts, callback)->
-				callback(null, {lines:[], rev:0}, {mongo:mongoPath})
+			it "should mark the project as updated", ->
+				@projectUpdater.markAsUpdated
+					.calledWith(project_id)
+					.should.equal true
 
-			@ProjectModel.update = (conditions, update, options, callback)->
-				conditions._id.should.equal project_id
-				update.$set["#{mongoPath}.lines"].should.equal docLines
-				update.$inc["#{mongoPath}.rev"].should.equal 1
-				done()
+			it "should send the doc the to the TPDS", ->
+				@tpdsUpdateSender.addDoc
+					.calledWith({
+						project_id: project_id
+						project_name: @project.name
+						doc_id: doc_id
+						rev: @rev
+						path: @path
+					})
+					.should.equal true
 
-			@ProjectEntityHandler.updateDocLines project_id, docId, docLines, ->
+			it "should call the callback", ->
+				@callback.called.should.equal true
 
-		it 'should call third party data store ', (done)->
-			rev = 3
-			@projectLocator.findElement = (opts, callback)->
-				callback(null, {lines:[],rev:rev}, {fileSystem:fileSystemPath})
-			@ProjectModel.update = (conditions, update, options, callback)-> callback()
-			@tpdsUpdateSender.addDoc = (options, _, callback)=>
-				options.project_id.should.equal project_id
-				options.docLines.should.equal docLines
-				options.path.should.equal fileSystemPath
-				options.project_name.should.equal @project.name
-				options.rev.should.equal (rev+1)
-				callback()
-				@projectUpdater.markAsUpdated.calledWith(project_id).should.equal true
-			@ProjectEntityHandler.updateDocLines project_id, docId, docLines, done
+		describe "when the doc has not been modified", ->
+			beforeEach ->
+				@DocstoreManager.updateDoc = sinon.stub().callsArgWith(3, null, false, @rev = 5)
+				@ProjectEntityHandler.updateDocLines project_id, doc_id, @lines, @callback
 
-	describe "flushing folders, docs and files", ->
+			it "should not mark the project as updated", ->
+				@projectUpdater.markAsUpdated.called.should.equal false
+
+			it "should not send the doc the to the TPDS", ->
+				@tpdsUpdateSender.addDoc.called.should.equal false
+
+			it "should call the callback", ->
+				@callback.called.should.equal true
+
+		describe "when the project is not found", ->
+			beforeEach ->
+				@ProjectGetter.getProjectWithoutDocLines = sinon.stub().callsArgWith(1, null, null)
+				@ProjectEntityHandler.updateDocLines project_id, doc_id, @lines, @callback
+
+			it "should return a not found error", ->
+				@callback.calledWith(new Errors.NotFoundError()).should.equal true
+
+		describe "when the doc is not found", ->
+			beforeEach ->
+				@projectLocator.findElement = sinon.stub().callsArgWith(1, null, null, null)
+				@ProjectEntityHandler.updateDocLines project_id, doc_id, @lines, @callback
+
+			it "should log out the error", ->
+				@logger.error
+					.calledWith(
+						project_id: project_id
+						doc_id: doc_id
+						lines: @lines
+						err: new Errors.NotFoundError("doc not found")
+						"doc not found while updating doc lines"
+					)
+					.should.equal true
+
+			it "should return a not found error", ->
+				@callback.calledWith(new Errors.NotFoundError()).should.equal true
+
+
+	describe "getting folders, docs and files", ->
 		beforeEach ->
 			@project.rootFolder = [
-				folders: [{
-					name    : "folder1"
-					folders : [{
-						name    : "folder2"
-						folders : [{
-							name:"folder4",
-							docs:[{name:"doc3", rev:3,lines:["doc3"]}],
-							fileRefs:[{_id:"file3_id", rev:3,name:"file3"}],
-							folders:[]
-							}]
-						docs    : [{
-							rev:2
-							name: "doc2"
-							lines: ["doc2", "lines"]
-						}]
-						fileRefs   : []
-					}]
-					docs    : []
-					fileRefs   : [{
-						rev:2
-						name : "file2"
-						_id  : "file2_id"
-					}]
-				}, {
-					name    : "folder3"
-					folders : []
-					docs    : []
-					fileRefs   : []
+				docs: [@doc1 = {
+					name  : "doc1"
+					_id   : "doc1_id"
 				}]
-				docs: [{
-					rev:1
-					name: "doc1"
-					lines: ["doc1", "lines"]
-				}]
-				fileRefs: [{
-					rev:1
+				fileRefs: [@file1 = {
+					rev  : 1
 					_id  : "file1_id"
 					name : "file1"
 				}]
+				folders: [@folder1 = {
+					name    : "folder1"
+					docs    : [@doc2 = {
+						name  : "doc2"
+						_id   : "doc2_id"
+					}]
+					fileRefs   : [@file2 = {
+						rev  : 2
+						name : "file2"
+						_id  : "file2_id"
+					}]
+					folders : []
+				}]
 			]
+			@ProjectGetter.getProjectWithoutDocLines = sinon.stub().callsArgWith(1, null, @project)
 
-		it "should work for a very small project", (done)->
-			@project.rootFolder[0].folders = []
-			@ProjectEntityHandler.getAllDocs project_id, (err, docs) =>
-				docs["/doc1"].name.should.equal "doc1"
-				@ProjectEntityHandler.getAllFiles project_id, (err, files) =>
-					files["/file1"].name.should.equal "file1"
-					done()
+		describe "getAllFolders", ->
+			beforeEach ->
+				@callback = sinon.stub()
+				@ProjectEntityHandler.getAllFolders project_id, @callback
 
-		it "should be able to get all folders", (done) ->
-			@ProjectEntityHandler.getAllFolders project_id, (err, folders) ->
-				should.exist folders["/"]
-				should.exist folders["/folder1"]
-				should.exist folders["/folder1/folder2"]
-				should.exist folders["/folder1/folder2/folder4"]
-				folders["/folder1/folder2/folder4"].name.should.equal "folder4"
-				should.exist folders["/folder3"]
-				done()
+			it "should get the project without the docs lines", ->
+				@ProjectGetter.getProjectWithoutDocLines
+					.calledWith(project_id)
+					.should.equal true
 
-		it "should be able to get all docs", (done) ->
-			@ProjectEntityHandler.getAllDocs project_id, (err, docs) ->
-				docs["/doc1"].name.should.equal "doc1"
-				docs["/folder1/folder2/doc2"].name.should.equal "doc2"
-				docs["/folder1/folder2/folder4/doc3"].lines.should.deep.equal ["doc3"]
-				done()
+			it "should call the callback with the folders", ->
+				@callback
+					.calledWith(null, {
+						"/": @project.rootFolder[0]
+						"/folder1": @folder1
+					})
+					.should.equal true
 
-		it "should be able to get all files", (done) ->
-			@ProjectEntityHandler.getAllFiles project_id, (err, files) ->
-				files["/file1"].name.should.equal "file1"
-				files["/folder1/file2"].name.should.equal "file2"
-				files["/folder1/folder2/folder4/file3"].name.should.equal "file3"
-				done()
+		describe "getAllFiles", ->
+			beforeEach ->
+				@callback = sinon.stub()
+				@ProjectEntityHandler.getAllFiles project_id, @callback
 
-		describe "flushProjectToThirdPartyDataStore", ->
-			beforeEach (done) ->
-				@addedDocs = {}
-				@addedFiles = {}
-				@tpdsUpdateSender.addDoc = (options, _, callback) =>
-					callback()
-				sinon.spy @tpdsUpdateSender, "addDoc"
-				@tpdsUpdateSender.addFile = (options, _, callback) =>
-					callback()
-				sinon.spy @tpdsUpdateSender, "addFile"
-				@documentUpdaterHandler.flushProjectToMongo = (project_id, sl_req_id, callback) ->
-					callback()
-				sinon.spy @documentUpdaterHandler, "flushProjectToMongo"
+			it "should call the callback with the files", ->
+				@callback
+					.calledWith(null, {
+						"/file1": @file1
+						"/folder1/file2": @file2
+					})
+					.should.equal true
 
-				@ProjectEntityHandler.flushProjectToThirdPartyDataStore project_id, (err) -> done()
+		describe "getAllDocs", ->
+			beforeEach ->
+				@docs = [{
+					_id:   @doc1._id
+					lines: @lines1 = ["one"]
+					rev:   @rev1 = 1
+				}, {
+					_id:   @doc2._id
+					lines: @lines2 = ["two"]
+					rev:   @rev2 = 2
+				}]
+				@DocstoreManager.getAllDocs = sinon.stub().callsArgWith(1, null, @docs)
+				@ProjectEntityHandler.getAllDocs project_id, @callback
 
-			it "should flush the documents from the document updater", ->
-				@documentUpdaterHandler.flushProjectToMongo
-					.calledWith(@project._id).should.equal true
-				@documentUpdaterHandler.flushProjectToMongo
-					.calledBefore(@tpdsUpdateSender.addDoc).should.equal true
-				@documentUpdaterHandler.flushProjectToMongo
-					.calledBefore(@tpdsUpdateSender.addFile).should.equal true
+			it "should get the doc lines and rev from the docstore", ->
+				@DocstoreManager.getAllDocs
+					.calledWith(project_id)
+					.should.equal true
 
-			it "should call addDoc for each doc", ->
-				@tpdsUpdateSender.addDoc.calledWith(
-					project_id : @project._id
-					path : "/doc1"
-					docLines: ["doc1", "lines"]
-					project_name: @project.name
-					rev:1
-				).should.equal true
-				@tpdsUpdateSender.addDoc.calledWith(
-					project_id : @project._id
-					path : "/folder1/folder2/doc2"
-					docLines: ["doc2", "lines"]
-					project_name: @project.name
-					rev:2
-				).should.equal true
+			it "should call the callback with the docs with the lines and rev included", ->
+				@callback
+					.calledWith(null, {
+						"/doc1": {
+							_id:   @doc1._id
+							lines: @lines1
+							name:  @doc1.name
+							rev:   @rev1
+						}
+						"/folder1/doc2":  {
+							_id:   @doc2._id
+							lines: @lines2
+							name:  @doc2.name
+							rev:   @rev2
+						}
+					})
+					.should.equal true
 
-			it "should call addFile for each file", ->
-				@tpdsUpdateSender.addFile.calledWith(
-					project_id : @project._id
-					file_id    : "file1_id"
-					path       : "/file1"
-					project_name: @project.name
-					rev:1
-				).should.equal true
-				@tpdsUpdateSender.addFile.calledWith(
-					project_id : @project._id
-					file_id    : "file2_id"
-					path       : "/folder1/file2"
-					project_name: @project.name
-					rev:2
-				).should.equal true
+	describe "flushProjectToThirdPartyDataStore", ->
+		beforeEach (done) ->
+			@project = {
+				_id: project_id
+				name: "Mock project name"
+			}
+			@ProjectModel.findById = sinon.stub().callsArgWith(1, null, @project)
+			@documentUpdaterHandler.flushProjectToMongo = sinon.stub().callsArg(2)
+			@tpdsUpdateSender.addDoc = sinon.stub().callsArg(2)
+			@tpdsUpdateSender.addFile = sinon.stub().callsArg(2)
+			@docs = {
+				"/doc/one": @doc1 = { _id: "mock-doc-1", lines: ["one"], rev: 5 }
+				"/doc/two": @doc2 = { _id: "mock-doc-2", lines: ["two"], rev: 6 }
+			}
+			@files = {
+				"/file/one": @file1 = { _id: "mock-file-1", rev: 7 }
+				"/file/two": @file2 = { _id: "mock-file-2", rev: 8 }
+			}
+			@ProjectEntityHandler.getAllDocs = sinon.stub().callsArgWith(1, null, @docs)
+			@ProjectEntityHandler.getAllFiles = sinon.stub().callsArgWith(1, null, @files)
+
+			@ProjectEntityHandler.flushProjectToThirdPartyDataStore project_id, () -> done()
+
+		it "should flush the project from the doc updater", ->
+			@documentUpdaterHandler.flushProjectToMongo
+				.calledWith(project_id)
+				.should.equal true
+
+		it "should look up the project in mongo", ->
+			@ProjectModel.findById
+				.calledWith(project_id)
+				.should.equal true
+
+		it "should get all the docs in the project", ->
+			@ProjectEntityHandler.getAllDocs
+				.calledWith(project_id)
+				.should.equal true
+
+		it "should get all the files in the project", ->
+			@ProjectEntityHandler.getAllFiles
+				.calledWith(project_id)
+				.should.equal true
+
+		it "should flush each doc to the TPDS", ->
+			for path, doc of @docs
+				@tpdsUpdateSender.addDoc
+					.calledWith({
+						project_id: project_id,
+						doc_id: doc._id
+						project_name: @project.name
+						rev: doc.rev
+						path: path
+					})
+					.should.equal true
+
+		it "should flush each file to the TPDS", ->
+			for path, file of @files
+				@tpdsUpdateSender.addFile
+					.calledWith({
+						project_id: project_id,
+						file_id: file._id
+						project_name: @project.name
+						rev: file.rev
+						path: path
+					})
+					.should.equal true
 	
 	describe "setRootDoc", ->
 		it "should call Project.update", ->
@@ -682,3 +781,101 @@ describe 'project entity handler', ->
 
 			@ProjectEntityHandler.copyFileFromExistingProject project_id, folder_id, oldProject_id, oldFileRef, (err, fileRef, parentFolder)->     
 
+
+	describe "renameEntity", ->
+		beforeEach ->
+			@entity_id = "4eecaffcbffa66588e000009"
+			@entityType = "doc"
+			@newName = "new.tex"
+			@path = mongo: "mongo.path", fileSystem: "/file/system/old.tex"
+			@projectLocator.findElement = sinon.stub().callsArgWith(1, null, @entity = { _id: @entity_id, name:"old.tex", rev:4 }, @path)
+			@ProjectModel.update = sinon.stub().callsArgWith(3)
+			@tpdsUpdateSender.moveEntity = sinon.stub()
+
+		it "should update the name in mongo", (done)->
+
+			@ProjectEntityHandler.renameEntity @project_id, @entity_id, @entityType, @newName, =>
+				@ProjectModel.update.calledWith({_id : @project_id}, {"$set":{"mongo.path.name":@newName}}).should.equal true
+				done()
+
+		it "should send the update to the tpds", (done)->
+			@ProjectEntityHandler.renameEntity @project_id, @entity_id, @entityType, @newName, =>
+				@tpdsUpdateSender.moveEntity.calledWith({project_id:@project_id, startPath:@path.fileSystem, endPath:"/file/system/new.tex", project_name:@project.name, rev:4}).should.equal true
+				done()
+
+	describe "_insertDeletedDocReference", ->
+		beforeEach ->
+			@doc =
+				_id: ObjectId()
+				name: "test.tex"
+			@callback = sinon.stub()
+			@ProjectModel.update = sinon.stub().callsArgWith(3)
+			@ProjectEntityHandler._insertDeletedDocReference project_id, @doc, @callback
+
+		it "should insert the doc into deletedDocs", ->
+			@ProjectModel.update
+				.calledWith({
+					_id: project_id
+				}, {
+					$push: {
+						deletedDocs: {
+							_id: @doc._id
+							name: @doc.name
+						}
+					}
+				})
+				.should.equal true
+
+		it "should call the callback", ->
+			@callback.called.should.equal true
+
+	describe "_cleanUpDoc", ->
+		beforeEach ->
+			@project =
+				_id: ObjectId(project_id)
+			@doc =
+				_id: ObjectId()
+				name: "test.tex"
+			@ProjectEntityHandler.unsetRootDoc = sinon.stub().callsArg(1)
+			@ProjectEntityHandler._insertDeletedDocReference = sinon.stub().callsArg(2)
+			@documentUpdaterHandler.deleteDoc = sinon.stub().callsArg(2)
+			@DocstoreManager.deleteDoc = sinon.stub().callsArg(2)
+			@callback = sinon.stub()
+
+		describe "when the doc is the root doc", ->
+			beforeEach ->
+				@project.rootDoc_id = @doc._id
+				@ProjectEntityHandler._cleanUpDoc @project, @doc, @callback
+
+			it "should unset the root doc", ->
+				@ProjectEntityHandler.unsetRootDoc
+					.calledWith(project_id)
+					.should.equal true
+
+			it "should delete the doc in the doc updater", ->
+				@documentUpdaterHandler.deleteDoc
+					.calledWith(project_id, @doc._id.toString())
+
+			it "should insert the doc into the deletedDocs array", ->
+				@ProjectEntityHandler._insertDeletedDocReference
+					.calledWith(@project._id, @doc)
+					.should.equal true
+
+			it "should delete the doc in the doc store", ->
+				@DocstoreManager.deleteDoc
+					.calledWith(project_id, @doc._id.toString())
+					.should.equal true
+
+			it "should call the callback", ->
+				@callback.called.should.equal true
+
+		describe "when the doc is not the root doc", ->
+			beforeEach ->
+				@project.rootDoc_id = ObjectId()
+				@ProjectEntityHandler._cleanUpDoc @project, @doc, @callback
+
+			it "should not unset the root doc", ->
+				@ProjectEntityHandler.unsetRootDoc.called.should.equal false
+
+			it "should call the callback", ->
+				@callback.called.should.equal true

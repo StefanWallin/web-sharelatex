@@ -107,11 +107,13 @@ define [
 			@$contents.hide()
 			@$toggle.find(".js-open").hide()
 			@$toggle.find(".js-closed").show()
+			@$entityListItemEl.removeClass("folder-open")
 
 		showEntries: () ->
 			@$contents.show()
 			@$toggle.find(".js-open").show()
 			@$toggle.find(".js-closed").hide()
+			@$entityListItemEl.addClass("folder-open")
 
 		onToggle: (e) ->
 			e.preventDefault()
@@ -119,3 +121,44 @@ define [
 				@hideEntries()
 			else
 				@showEntries()
+
+		getContextMenuEntries: (args...) ->
+			entries = EntityView::getContextMenuEntries.apply(this, args)
+			entries.push {
+				divider: true
+			}
+			entries.push @getFolderContextMenuEntries()...
+			return entries
+
+		getFolderContextMenuEntries: () ->
+			return [{
+				text: "New file"
+				onClick: () =>
+					ga('send', 'event', 'editor-interaction', 'newFile', "folderView")
+					@manager.showNewDocModal(@model)
+			}, {
+				text: "New folder"
+				onClick: () =>
+					ga('send', 'event', 'editor-interaction', 'newFolder', "folderView")
+					@manager.showNewFolderModal(@model)
+			}, {
+				text: "Upload file"
+				onClick: () =>
+					ga('send', 'event', 'editor-interaction', 'uploadFile', "folderView")
+					@manager.showUploadFileModal(@model)
+			}]
+
+		setLabels: (labels) ->
+			showLabel = false
+			for entity in @views
+				if entity.setLabels(labels)
+					showLabel = true
+
+			if showLabel
+				@$entityListItemEl.addClass("show-label")
+				@$labelEl.text("±")
+				return true
+			else
+				@$entityListItemEl.removeClass("show-label")
+				@$labelEl.text("")
+				return false
